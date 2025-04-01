@@ -1,0 +1,38 @@
+FROM python:3.12.3-slim
+
+# Crear usuario no privilegiado
+RUN groupadd -r appuser && useradd -r -g appuser -s /bin/false appuser
+
+# Actualizar e instalar dependencias
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copiar requirements y instalar dependencias
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copiar código
+COPY receiver.py config.py ./
+
+# Configurar permisos adecuados
+RUN chmod 644 config.py && chown appuser:appuser config.py && \
+    mkdir -p /tmp/cache && \
+    chown -R appuser:appuser /tmp/cache && \
+    chmod 700 /tmp/cache
+
+# Cambiar al usuario no privilegiado
+USER appuser
+
+# Especificar que el contenedor escucha en un puerto
+EXPOSE 12345
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import socket; s=socket.socket(); s.connect(('localhost', 12345)); s.close()"
+
+# Ejecutar script
+CMD ["python", "receiver.py"]

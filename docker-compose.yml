@@ -1,0 +1,132 @@
+
+secrets:
+  private_key:
+    file: ./secrets/private_key.pem
+  encrypted_password:
+    file: ./secrets/encrypted_password.txt
+  plain_password:
+    file: ./secrets/plain_password.txt
+services:
+  mysql:
+    image: mysql:8.0
+    restart: always
+    command:
+    #- "/bin/sh"
+    #- "-c"
+    #- "/decrypt_password.sh mysqld --default-authentication-plugin=mysql_native_password"
+    - "--default-authentication-plugin=mysql_native_password"
+    #- "--default-authentication-plugin=mysql_native_password"
+    #- "--init-file=/docker-entrypoint-initdb.d/init.sql"
+    secrets:
+    - plain_password
+    #  - private_key
+    #  - encrypted_password
+    volumes:
+    - ./mysql-init:/docker-entrypoint-initdb.d  # Asegurar volumen de inicialización
+    - mysql-data:/var/lib/mysql  # Esta línea falta - conecta el volumen al contenedor
+    environment:
+    - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/plain_password
+    #environment:
+    #  - MYSQL_ROOT_HOST=%    # Permite conexiones desde cualquier host
+    #  - MYSQL_DATABASE=universidad
+    #  - MYSQL_ALLOW_EMPTY_PASSWORD=yes
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "--password=$$(cat /run/secrets/plain_password)"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 5s
+    networks:
+      - backend
+  redis:
+    image: redis:6.2
+    restart: always
+    command: ["redis-server", "--requirepass", "defaultpassword", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "defaultpassword", "ping"]
+      interval: 30s
+      retries: 5
+      start_period: 30s
+      timeout: 5s
+    networks:
+      - backend
+
+
+  dbinit:
+    build:
+      context: .
+      dockerfile: Dockerfile.dbinit
+    secrets:
+      - encrypted_password
+      - private_key
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_ROOT_USER=root
+      - MYSQL_DATABASE=universidad
+      - PRIVATE_KEY_PATH=/run/secrets/private_key
+      - ENCRYPTED_PASSWORD_PATH=/run/secrets/encrypted_password 
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: on-failure:3  # Intentará reiniciarse hasta 3 veces si falla
+    #restart: "no"
+    networks:
+      - backend
+
+
+  receiver:
+    build:
+      context: .
+      dockerfile: Dockerfile.receiver
+    environment:
+      - RECEIVER_HOST=0.0.0.0
+      - RECEIVER_PORT=12345
+      - REDIS_URL=redis://:defaultpassword@redis:6379
+    ports:
+      - "12345:12345"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+
+  processor:
+    user: root  # Añade esta línea para depurar
+    build:
+      context: .
+      dockerfile: Dockerfile.processor
+    secrets:
+      - encrypted_password
+      - private_key
+    environment:
+      - DATABASE_URL=mysql+mysqlconnector://root:PASSWORD_PLACEHOLDER@mysql/universidad
+      - REDIS_URL=redis://:defaultpassword@redis:6379
+      - PRIVATE_KEY_PATH=/run/secrets/private_key
+      - ENCRYPTED_PASSWORD_PATH=/run/secrets/encrypted_password
+    ports:
+      - "12346:12346"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+volumes:
+  mysql-data:
