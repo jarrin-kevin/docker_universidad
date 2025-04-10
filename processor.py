@@ -184,6 +184,18 @@ class DataProcessor:
     def __init__(self, db_handler, movement_notifier):
         self.db_handler = db_handler #llama a db_hanbler la clase que se encarga de conectarse a sql y ejecutar las sentencias sql
         self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus
+    
+    def _normalizar_campus(self, campus_raw):
+        """Normaliza los diferentes nombres de campus a las dos categorías principales"""
+        # Mapeo de alias a nombres estandarizados
+        campus_map = {
+            'CC': 'Central',
+            'Comisariato': 'Central',
+            'CBAL': 'Balzay',
+            'balzay': 'Balzay'
+            # Añadir más alias según sea necesario
+        }
+        return campus_map.get(campus_raw, campus_raw)
     def _parse_message(self,message):
         """Metodo encargado de recibir los datos y extraer la informacion necesario del mismo"""
         try:
@@ -209,6 +221,8 @@ class DataProcessor:
             # Con el correo, se procede a inferir en el genero y hashear el correo
             gender_inferred = self._infer_gender(user)
             correo_hash = hashlib.sha256(user.encode("utf-8")).hexdigest()
+            # Normalizar el nombre del campus
+            campus = self._normalizar_campus(campus)
             return {
                 'correo_hash': correo_hash,
                 'gender': gender_inferred,
