@@ -90,7 +90,7 @@ class receiver_socket(DataReceiver):
         try:
             data = json.loads(message)
             # Verificar que existan y contengan valor los campos obligatorios
-            required_fields = ["_ap_name", "_user", "_timestamp"]
+            required_fields = ["message", "timestamp"]
             return all(field in data and data[field] for field in required_fields)
         except json.JSONDecodeError:
             return False
