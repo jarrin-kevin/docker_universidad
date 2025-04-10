@@ -108,13 +108,31 @@ class DBHandler:
             logging.error(f"Error conectando a la base de datos: {e}")
             raise e
     def save_to_conexiones(self, correo,sexo, ap, campus, fecha, hora):
-        query = text("""
-            INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
-            VALUES (:correo, :sexo,:ap, :campus, :fecha, :hora)
+        # Verificar si existe
+        check_query = text("""
+        SELECT id_conexiones FROM conexiones 
+        WHERE correo = :correo AND fecha = :fecha
         """)
-        self.session.execute(query, {"correo": correo, "sexo": sexo,"ap": ap, "campus": campus, "fecha": fecha, "hora": hora})
-        logging.info("Registro insertado en conexiones.")
-    
+        result = self.session.execute(check_query, {"correo": correo, "fecha": fecha}).fetchone()
+        if result:
+            #actualizar hora del usuario
+            update_query = text("""
+                UPDATE conexiones 
+                SET ap = :ap, campus = :campus, hora = :hora
+                WHERE correo = :correo AND fecha = :fecha
+            """)
+            self.session.execute(update_query, 
+                {"correo": correo, "ap": ap, "campus": campus, "hora": hora, "fecha": fecha})
+            logging.info("Registro actualizado en conexiones.")
+        else:
+            #Insertar nuevo conexion
+            insert_query = text("""
+            INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
+            VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
+            """)    
+            self.session.execute(insert_query, 
+                {"correo": correo, "sexo": sexo, "ap": ap, "campus": campus, "fecha": fecha, "hora": hora})
+            logging.info("Registro insertado en conexiones.")
     def save_to_movimientos(self, correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida):
         query = text("""
             INSERT INTO movimientos (correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida)
@@ -164,71 +182,100 @@ class DataProcessor:
         :param message: Cadena de texto con formato JSON.
         :param session: Sesión activa de SQLAlchemy."""
     def __init__(self, db_handler, movement_notifier):
-        self.db_handler = db_handler
-        self.movement_notifier = movement_notifier
-    def process_message(self, message):
+        self.db_handler = db_handler #llama a db_hanbler la clase que se encarga de conectarse a sql y ejecutar las sentencias sql
+        self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus
+    def _parse_message(self,message):
+        """Metodo encargado de recibir los datos y extraer la informacion necesario del mismo"""
         try:
             data = json.loads(message)
             logging.info(f"Mensaje recibido: {data}")
+
             # Extraer campos obligatorios
-            ap_name = data.get("_ap_name", "N/A")
-            user = data.get("_user", "N/A")
-            timestamp = data.get("_timestamp", "N/A")
-            
-            #Valides del mensaje
-            #if "N/A" in (ap_name, user, timestamp):
-            #    logging.warning("Mensaje inválido: falta información esencial.")
-            #    return
-            
-            # Inferir género
-            gender_inferred = self._infer_gender(user)
-
-
-
-            #hashear el correo
-            correo_hash = hashlib.sha256(user.encode("utf-8")).hexdigest()
-
-            # Separar _ap_name_ en campus y AP
+            timestamp = data.get("timestamp", "N/A")
+            dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ")
+            #obtener mensaje dentro de ahi tengo: ap(campus-ap),user(correo hash)
+            message = data.get('message', '')
+            # Extraer campus (nombre del punto de acceso)
+            ap_match = re.search(r'AP:([\w\-\d\-]+)', message)
+            apmessage = ap_match.group(1) if ap_match else None
             try:
-                campus, ap = ap_name.split('-', 1)
+                campus,ap =  apmessage.split('-', 1)
             except Exception as e:
                 logging.error(f"Error al dividir _ap_name_: {e}")
                 return
-
-            # Convertir el timestamp a datetime y extraer fecha y hora
-            dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ")
-            fecha = dt.date()
-            hora = dt.time()
-            # Consultar el último campus registrado para este usuario
-            last_campus = self.db_handler.get_last_campus(correo_hash)
-
-            # Si hay registro previo y el campus es distinto, registrar el movimiento
-            logging.info(f"Campus actual: {campus}, Último campus: {last_campus}")
-            if last_campus and last_campus != campus:
-                # Obtener la hora de la última conexión
-                hora_anterior = self.db_handler.get_last_connection_time(correo_hash)
-                if hora_anterior:
-                    self.db_handler.save_to_movimientos(correo_hash, gender_inferred, last_campus, campus, fecha, hora,hora_anterior)
-                    
-                    if self.movement_notifier:
-                        self.movement_notifier.notify_movement(
-                            fecha=fecha,
-                            hora_actual=hora,
-                            hora_anterior=hora_anterior,
-                            campus_actual=campus,
-                            campus_anterior=last_campus
-                        )
-                logging.info(f"El usuario {correo_hash} se movilizó de {last_campus} a {campus}.")
-                        # Insertar registro en conexiones
-            self.db_handler.save_to_conexiones(correo_hash, gender_inferred, ap, campus, fecha, hora)
-            self.db_handler.commit() #guardar cambios
+            # Extraer nombre de usuario (correo electrónico)
+            email_match = re.search(r'user-([\w.]+@[\w.]+)', message)
+            user = email_match.group(1) if email_match else None
+            # Con el correo, se procede a inferir en el genero y hashear el correo
+            gender_inferred = self._infer_gender(user)
+            correo_hash = hashlib.sha256(user.encode("utf-8")).hexdigest()
+            return {
+                'correo_hash': correo_hash,
+                'gender': gender_inferred,
+                'ap': ap,
+                'campus': campus,
+                'fecha': dt.date(),
+                'hora': dt.time()
+            }
         except json.JSONDecodeError as e:
-           logging.error(f"Error al decodificar JSON: {e}")
-           self.db_handler.rollback()
+            logging.error(f"Error al decodificar JSON: {e}")
+            return None
+            
+    def _detect_movement(self, datos, last_campus):
+        """Metodo encargado de preguntar si el usuario cambio de campus"""
+        if last_campus and last_campus != datos['campus']:
+            logging.info(f"Campus actual: {datos['campus']}, Último campus: {last_campus}")
+            return True
+        return False
+        
+    def _handle_movement(self, datos, last_campus):
+        """Método encargado de obtener la última conexión del usuario que cambió de campus y guardar el registro en la base"""
+        hora_anterior = self.db_handler.get_last_connection_time(datos['correo_hash'])
+        if hora_anterior:
+            self.db_handler.save_to_movimientos(
+                datos['correo_hash'], 
+                datos['gender'], 
+                last_campus, 
+                datos['campus'], 
+                datos['fecha'], 
+                datos['hora'],
+                hora_anterior
+            )
+            if self.movement_notifier:
+                self.movement_notifier.notify_movement(
+                    fecha=datos['fecha'],
+                    hora_actual=datos['hora'],
+                    hora_anterior=hora_anterior,
+                    campus_actual=datos['campus'],
+                    campus_anterior=last_campus
+                )
+            logging.info(f"El usuario {datos['correo_hash']} se movilizó de {last_campus} a {datos['campus']}.")
+    def _process_connection(self, datos):
+        # Aquí actualizaríamos la conexión del usuario si existe,
+        # o crearíamos una nueva si no existe
+        self.db_handler.save_to_conexiones(
+            datos['correo_hash'], 
+            datos['gender'],
+            datos['ap'],
+            datos['campus'],
+            datos['fecha'],
+            datos['hora']
+        )
+    def process_message(self, message):
+        try:
+            datos = self._parse_message(message)
+            if not datos:
+                return
+            # Consultar el último campus registrado para este usuario
+            last_campus = self.db_handler.get_last_campus(datos['correo_hash'])
+            # Si hay registro previo y el campus es distinto, registrar el movimiento
+            if self._detect_movement(datos, last_campus): #un if para llamar un metodo que tiene otro if?
+                self._handle_movement(datos, last_campus) #guardar en movimientos
+            self._process_connection(datos)
+            self.db_handler.commit()
         except Exception as e:
             logging.error(f"Error procesando mensaje: {e}")
             self.db_handler.rollback()
-
     def _infer_gender(self, user):
         """Infiere el género basado en el nombre del usuario."""
         try:
