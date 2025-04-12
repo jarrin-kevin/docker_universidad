@@ -57,7 +57,6 @@ class receiver_socket(DataReceiver):
         logging.info(f"Conexión establecida desde: {client_address}")
        # El uso de await permite que otras tareas sigan ejecutándose mientras se realiza la operación.
         buffer = b""  # Buffer para acumular datos si llegan fragmentados
-        #Maneja una conexión individual con un cliente, incluyendo la recepción de datos y su procesamiento.
         try:
             while True: #(mantiene la conexión mientras el cliente siga enviando dato)
                 data = await reader.read(4096)#lee los datos que llegan en fragmentos.
@@ -65,22 +64,30 @@ class receiver_socket(DataReceiver):
                     break
                 buffer += data #va guardando en buffer
                 # Para visualizar los datos en consola
-                logging.info(f"Datos recibidos: {data.decode('utf-8', errors='ignore')}")  # Imprime los datos en formato legible
-                messages = buffer.split(b'\x00') # hasta encontrar el separador \x00 separa los mensajes
-                # Procesar mensajes completos
-                for message in messages[:-1]: #Selecciona todos los elementos menos el último. Razón: Si el último mensaje no está completo (falta más información), no se puede procesar, Se guarda en el buffer para completar la información en la próxima iteración.
-                    #decodificar el mensaje
-                    decoded_message = message.decode("utf-8")
-                    if self.is_valid_message(decoded_message):
+                logging.info(f"Datos recibidos: {len(data)} bytes")
+
+                # Procesar el mensaje una vez que tenemos todos los datos
+                if buffer:
+                    logging.info(f"Total de datos recibidos: {len(buffer)} bytes")
+                    try:
+                        decoded_message = buffer.decode("utf-8", errors='ignore')
+                        logging.info(f"Mensaje decodificado (primeros 200 caracteres): {decoded_message[:200]}...")
+                        valid, clean_message = self.is_valid_message(decoded_message)
+                        if valid:
                         # Enviar mensaje a la cola de Redis
-                        await asyncio.to_thread(self.redis_client.rpush, "socket_messages", decoded_message)
-                    #self.redis_client.rpush("socket_messages", decoded_message) #Inserta el mensaje decodificado al final de una lista en Redis llamada socket_messages
-                    else:
-                        logging.warning("Mensaje inválido descartado en receiver.")
-                buffer = messages[-1] # Si el último mensaje está incompleto, se guarda en el buffer para ser completado más adelante.
+                            logging.info("Mensaje válido, enviando a Redis")
+                            await asyncio.to_thread(self.redis_client.rpush, "socket_messages", clean_message)
+                            buffer = b""  # Limpiar el buffer después de procesar con éxito
+                        else:
+                            logging.warning("Mensaje inválido descartado en receiver.")
+                            buffer = b""  # También podría ser útil limpiar el buffer aquí
                 
+                    except Exception as e:
+                        logging.error(f"Error procesando mensaje: {e}")
         except Exception as e:
-            print(f"Error en la conexión con {client_address}: {e}")
+            logging.error(f"Error en la conexión con {client_address}: {e}")
+        
+
         finally:
             logging.info(f"Cerrando conexión con {client_address}")
             writer.close() #Cierra la conexión con el cliente de forma ordenada.
@@ -88,12 +95,50 @@ class receiver_socket(DataReceiver):
     
     def is_valid_message(self, message: str) -> bool:
         try:
-            data = json.loads(message)
-            # Verificar que existan y contengan valor los campos obligatorios
-            required_fields = ["message", "timestamp"]
-            return all(field in data and data[field] for field in required_fields)
-        except json.JSONDecodeError:
-            return False
+            logging.info(f"Mensaje completo recibido: {message}")
+            # Intenta encontrar los límites del objeto JSON
+            # Busca desde el primer '{' hasta el último '}'
+            start = message.find('{')
+            end = message.rfind('}') + 1
+            if start >= 0 and end > start:
+                # Extrae solo el objeto JSON
+                json_str = message[start:end]
+                # Intenta analizarlo
+                data = json.loads(json_str)
+                # Muestra todos los campos para depuración
+                logging.info(f"Campos en el mensaje JSON: {list(data.keys())}")
+                # Verificar que existan y contengan valor los campos obligatorios
+                timestamp_present = 'timestamp' in data or '_timestamp' in data
+                message_present = (
+                'message' in data or 
+                'short_message' in data or 
+                '_message' in data
+                )
+                if not 'message' in data:
+                   if '_message' in data: 
+                    data['message'] = data['_message']
+                if not 'timestamp' in data and '_timestamp' in data:
+                    data['timestamp'] = data['_timestamp']
+                # Ahora verificar que existan y contengan valor
+                required_fields = ["message", "timestamp"]
+
+                result = all(field in data and data[field] for field in required_fields)
+                if not result:
+                    missing = [field for field in required_fields if field not in data or not data[field]]
+                    logging.warning(f"Campos faltantes o vacíos: {missing}")
+                else:
+                    logging.info("Todos los campos requeridos están presentes y no vacíos")
+                    # Si es válido, añade el mensaje limpio al buffer
+                    return True, json_str
+                return False, None
+            logging.warning("No se encontró un objeto JSON válido en el mensaje")
+            return False, None
+        except json.JSONDecodeError as e:
+            logging.warning(f"Error decodificando JSON: {e}, mensaje: {message[:100]}...")
+            return False, None
+        except Exception as e: 
+            logging.error(f"Error inesperado en validación: {e}")
+            return False, None
 
 
 if __name__ == "__main__":

@@ -204,17 +204,44 @@ class DataProcessor:
 
             # Extraer campos obligatorios
             timestamp = data.get("timestamp", "N/A")
-            dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ")
+            # Manejar el timestamp según su tipo
+            if isinstance(timestamp, (int, float)):
+                # Si es un timestamp Unix (número), convertirlo a datetime
+                dt = datetime.fromtimestamp(timestamp)
+            elif isinstance(timestamp, str):
+                # Si es una cadena, intentar parsearlo como ISO
+                try:
+                    dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ")
+                except ValueError:
+                    # Intentar otros formatos comunes si el primero falla
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            else:
+                logging.error(f"Formato de timestamp no reconocido: {timestamp}")
+                return None
+            
+
+
+
             #obtener mensaje dentro de ahi tengo: ap(campus-ap),user(correo hash)
-            message = data.get('message', '')
+            message_text = data.get('message', '') or data.get('_message', '')
             # Extraer campus (nombre del punto de acceso)
+            # Añadir más logging para depuración
+            logging.info(f"Texto del mensaje: {message}")
             ap_match = re.search(r'AP:([\w\-\d\-]+)', message)
-            apmessage = ap_match.group(1) if ap_match else None
+            if not ap_match:
+                logging.error(f"No se pudo encontrar el AP en el mensaje: {message[:100]}...")
+                return None
+            apmessage = ap_match.group(1)
+            logging.info(f"AP encontrado: {apmessage}")
+            if '-' not in apmessage:
+                logging.error(f"El AP no tiene el formato esperado con guión: {apmessage}")
+                return None
+            # Extraer campus y AP
             try:
                 campus,ap =  apmessage.split('-', 1)
             except Exception as e:
                 logging.error(f"Error al dividir _ap_name_: {e}")
-                return
+                return None
             # Extraer nombre de usuario (correo electrónico)
             email_match = re.search(r'user-([\w.]+@[\w.]+)', message)
             user = email_match.group(1) if email_match else None
