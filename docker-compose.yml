@@ -7,6 +7,109 @@ secrets:
   plain_password:
     file: ./secrets/plain_password.txt
 services:
+  rsyslog-proxy: #Servicio rsyslog-proxy
+     build:
+       context: ./rsyslogproxy
+       dockerfile: Dockerfile
+     container_name: rsyslog-proxy
+     ports:
+       - "514:514"
+       - "514:514/udp"
+     volumes:
+       - ./rsyslogproxy/rsyslog.conf:/etc/rsyslog.conf:ro
+     networks:
+       - backend
+     restart: unless-stopped
+
+  mongodb: #Servicio mongo-db
+    container_name: graylog-mongodb
+    image: mongo:6.0.14
+    networks:
+    - backend
+    volumes:
+    - mongo_data:/data/db
+    environment:
+    - TZ=America/Guayaquil
+
+  opensearch: #Servicio opensearch
+    container_name: graylog-opensearch
+    image: "opensearchproject/opensearch:2.12.0"
+    volumes:
+    - opensearch_data:/usr/share/opensearch/data
+    environment:
+    - TZ=America/Guayaquil
+    - http.host=0.0.0.0
+    - transport.host=localhost
+    - network.host=0.0.0.0
+    - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
+    - "bootstrap.memory_lock=true"
+    - "discovery.type=single-node"
+    - "action.auto_create_index=false"
+    - "plugins.security.ssl.http.enabled=false"
+    - "plugins.security.disabled=true"
+    - OPENSEARCH_INITIAL_ADMIN_PASSWORD=vx\l^D%HE$_/Jc%QxnQfJ\rxrNG%Zy~6
+    ulimits:
+      memlock:
+        hard: -1
+        soft: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: "on-failure"
+    networks:
+    - backend
+
+# Graylog: https://hub.docker.com/r/graylog/graylog/
+  graylog:
+    container_name: graylog
+#    image: graylog/graylog:5.2
+    image: graylog/graylog:6.1.8
+    volumes:
+    - graylog_data:/usr/share/graylog/data
+    environment:
+    - TZ=America/Guayaquil
+    - GRAYLOG_ROOT_TIMEZONE=America/Guayaquil
+    - GRAYLOG_NODE_ID_FILE=/usr/share/graylog/data/config/node-id
+    - GRAYLOG_HTTP_BIND_ADDRESS=0.0.0.0:9000
+    - GRAYLOG_ELASTICSEARCH_HOSTS=http://opensearch:9200
+    - GRAYLOG_MONGODB_URI=mongodb://mongodb:27017/graylog
+# CHANGE ME (must be at least 16 characters)!
+    - GRAYLOG_PASSWORD_SECRET=SBMjcvj3zspXEbaczZH7
+# Password: admin
+    - GRAYLOG_ROOT_PASSWORD_SHA2=78deffb2f8b2cd2fdea88c464ab3b99f1b299022c61d787b593dafa18facfbeb
+    - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+    - GRAYLOG_MESSAGE_JOURNAL_ENABLED=true
+    - GRAYLOG_MESSAGE_JOURNAL_MAX_SIZE=5gb
+    - GRAYLOG_MESSAGE_JOURNAL_SEGMENT_SIZE=100mb
+    - GRAYLOG_SERVER_JAVA_OPTS=-Xms2g -Xmx2g
+    # Buffer tuning
+    - GRAYLOG_PROCESSBUFFER_PROCESSORS=6
+    - GRAYLOG_OUTPUTBUFFER_PROCESSORS=1
+    - GRAYLOG_INPUTBUFFER_PROCESSORS=1
+
+    #entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+    links:
+    - mongodb:mongo
+    - opensearch
+    networks:
+    - backend
+    restart: always
+    depends_on:
+    - mongodb
+    - opensearch
+    ports:
+# Graylog web interface and REST API
+    - 9000:9000
+# Syslog TCP
+    - 1514:1514
+# Syslog UDP
+    - 1514:1514/udp
+# GELF TCP
+    - 12201:12201
+# GELF UDP
+    - 12201:12201/udp
+
+
   mysql:
     image: mysql:8.0
     restart: always
@@ -87,7 +190,7 @@ services:
       - RECEIVER_PORT=12345
       - REDIS_URL=redis://:defaultpassword@redis:6379
     ports:
-      - "12345:12345"
+      - "12345:12345/udp"
     depends_on:
       redis:
         condition: service_healthy
@@ -109,7 +212,7 @@ services:
       - PRIVATE_KEY_PATH=/run/secrets/private_key
       - ENCRYPTED_PASSWORD_PATH=/run/secrets/encrypted_password
     ports:
-      - "12346:12346"
+      - "12347:12347/udp"
     depends_on:
       mysql:
         condition: service_healthy
@@ -130,3 +233,10 @@ networks:
 
 volumes:
   mysql-data:
+  graylog_data:
+    driver: local
+  opensearch_data:
+    driver: local
+  mongo_data:
+    driver: local
+

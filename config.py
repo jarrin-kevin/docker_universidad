@@ -32,5 +32,5 @@ URL_DATABASE = {
 MOVEMENT_NOTIFICATION = {
     "enabled": True,
     "target_host": "host.docker.internal",
-    "target_port": 12347
+    "target_port": 12201
 }

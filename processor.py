@@ -196,12 +196,12 @@ class DataProcessor:
             # Añadir más alias según sea necesario
         }
         return campus_map.get(campus_raw, campus_raw)
+    
     def _parse_message(self,message):
         """Metodo encargado de recibir los datos y extraer la informacion necesario del mismo"""
         try:
             data = json.loads(message)
             logging.info(f"Mensaje recibido: {data}")
-
             # Extraer campos obligatorios
             timestamp = data.get("timestamp", "N/A")
             # Manejar el timestamp según su tipo
@@ -218,10 +218,6 @@ class DataProcessor:
             else:
                 logging.error(f"Formato de timestamp no reconocido: {timestamp}")
                 return None
-            
-
-
-
             #obtener mensaje dentro de ahi tengo: ap(campus-ap),user(correo hash)
             message_text = data.get('message', '') or data.get('_message', '')
             # Extraer campus (nombre del punto de acceso)
@@ -243,7 +239,7 @@ class DataProcessor:
                 logging.error(f"Error al dividir _ap_name_: {e}")
                 return None
             # Extraer nombre de usuario (correo electrónico)
-            email_match = re.search(r'user-([\w.]+@[\w.]+)', message)
+            email_match = re.search(r'(?:user(?:name)?[-:\s]+|username[-:\s]+)([\w.]+@[\w.]+)', message)
             user = email_match.group(1) if email_match else None
             # Con el correo, se procede a inferir en el genero y hashear el correo
             gender_inferred = self._infer_gender(user)
@@ -401,16 +397,19 @@ class MovementNotifier:
             
             # Convertir a JSON y añadir un salto de línea para delimitar mensajes
             message = json.dumps(movement_data) + "\n"
-            
+            # Crear socket UDP en lugar de TCP
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)            
+            # Enviar datos - para UDP no necesitamos conectar primero
+            sock.sendto(message.encode('utf-8'), (self.target_host, self.target_port))
+            logging.info(f"Mensaje UDP enviado: {message}")
+
             # Crear socket TCP
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            
+            #sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             # Conectar al host y puerto configurados
-            sock.connect((self.target_host, self.target_port))
-            
+            #sock.connect((self.target_host, self.target_port))
             # Enviar datos
-            sock.sendall(message.encode('utf-8'))
-            logging.info(f"Mensaje enviado: {message}")
+            #sock.sendall(message.encode('utf-8'))
+            #logging.info(f"Mensaje enviado: {message}")
             
             # Cerrar la conexión
             sock.close()
