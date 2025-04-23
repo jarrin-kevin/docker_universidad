@@ -38,7 +38,7 @@ class receiver_udp(DataReceiver):
         try:
             self.redis_client = redis.from_url(self.redis_url)
             self.redis_client.ping()
-            logging.info("Conexión con Redis exitosa.")
+            #logging.info("Conexión con Redis exitosa.")
         except Exception as e:
             logging.error(f"Error conectando a Redis: {e}")
             # Se lanza la excepción personalizada para que el orquestador la capture
@@ -82,14 +82,6 @@ class receiver_udp(DataReceiver):
                     if syslog_result:
                         # Si se procesó correctamente como syslog, termina
                         return
-                    # Si no es syslog, intenta procesar como JSON
-                    valid, clean_message = self.is_valid_message(decoded_message)
-                    if valid:
-                        # Enviar mensaje a la cola de Redis
-                        logging.info("Mensaje válido, enviando a Redis")
-                        await asyncio.to_thread(self.redis_client.rpush, "socket_messages", clean_message)
-                    else:
-                        logging.warning("Mensaje inválido descartado en receiver.")
                 except Exception as e:
                     logging.error(f"Error procesando mensaje: {e}")
         except Exception as e:
@@ -117,7 +109,7 @@ class receiver_udp(DataReceiver):
             }
             # Convertir a string JSON
             json_str = json.dumps(json_message)
-            logging.info(f"Mensaje syslog convertido a JSON: {json_str[:200]}...")
+            #logging.info(f"Mensaje syslog convertido a JSON: {json_str[:200]}...")
 
             # Enviar a Redis
             asyncio.create_task(
@@ -129,53 +121,6 @@ class receiver_udp(DataReceiver):
             logging.error(f"Error procesando mensaje syslog: {e}")
             return False
 
-
-    def is_valid_message(self, message: str) -> tuple:
-        try:
-            logging.info(f"Mensaje completo recibido: {message}")
-            # Intenta encontrar los límites del objeto JSON
-            # Busca desde el primer '{' hasta el último '}'
-            start = message.find('{')
-            end = message.rfind('}') + 1
-            if start >= 0 and end > start:
-                # Extrae solo el objeto JSON
-                json_str = message[start:end]
-                # Intenta analizarlo
-                data = json.loads(json_str)
-                # Muestra todos los campos para depuración
-                logging.info(f"Campos en el mensaje JSON: {list(data.keys())}")
-                # Verificar que existan y contengan valor los campos obligatorios
-                timestamp_present = 'timestamp' in data or '_timestamp' in data
-                message_present = (
-                'message' in data or 
-                'short_message' in data or 
-                '_message' in data
-                )
-                if not 'message' in data:
-                   if '_message' in data: 
-                    data['message'] = data['_message']
-                if not 'timestamp' in data and '_timestamp' in data:
-                    data['timestamp'] = data['_timestamp']
-                # Ahora verificar que existan y contengan valor
-                required_fields = ["message", "timestamp"]
-
-                result = all(field in data and data[field] for field in required_fields)
-                if not result:
-                    missing = [field for field in required_fields if field not in data or not data[field]]
-                    logging.warning(f"Campos faltantes o vacíos: {missing}")
-                else:
-                    logging.info("Todos los campos requeridos están presentes y no vacíos")
-                    # Si es válido, añade el mensaje limpio al buffer
-                    return True, json_str
-                return False, None
-            logging.warning("No se encontró un objeto JSON válido en el mensaje")
-            return False, None
-        except json.JSONDecodeError as e:
-            logging.warning(f"Error decodificando JSON: {e}, mensaje: {message[:100]}...")
-            return False, None
-        except Exception as e: 
-            logging.error(f"Error inesperado en validación: {e}")
-            return False, None
 
 # Clase para manejar el protocolo UDP
 class UDPServerProtocol:

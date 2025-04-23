@@ -40,7 +40,7 @@ class PasswordDecryptor:
             private_key_path = DATABASE_CONFIG.get("PRIVATE_KEY_PATH", "/run/secrets/private_key")
             encrypted_password_path = DATABASE_CONFIG.get("ENCRYPTED_PASSWORD_PATH", "/run/secrets/encrypted_password")
             
-            logging.info(f"Descifrando contraseña usando clave privada en: {private_key_path}")
+            #logging.info(f"Descifrando contraseña usando clave privada en: {private_key_path}")
             
             # Leer la clave privada
             with open(private_key_path, 'rb') as key_file:
@@ -56,7 +56,7 @@ class PasswordDecryptor:
             cipher = PKCS1_OAEP.new(private_key)
             decrypted_password = cipher.decrypt(encrypted_password)
             
-            logging.info("Contraseña descifrada correctamente")
+            #logging.info("Contraseña descifrada correctamente")
             return decrypted_password.decode('utf-8')
         except Exception as e:
             logging.error(f"Error al descifrar la contraseña: {e}")
@@ -70,7 +70,7 @@ class RedisConnector:
             redis_url = CONFIG_RECEIVER["redis_url"]
             self.redis_client = redis.from_url(redis_url)
             self.redis_client.ping()
-            logging.info("Conexión a Redis establecida.")
+            #logging.info("Conexión a Redis establecida.")
         except Exception as e:
             logging.error(f"Error conectando a Redis: {e}")
             raise 
@@ -103,7 +103,7 @@ class DBHandler:
             self.engine = create_engine(database_url)
             self.Session = sessionmaker(bind=self.engine)
             self.session = self.Session()
-            logging.info("Conexión a la base de datos establecida.")
+            #logging.info("Conexión a la base de datos establecida.")
         except Exception as e:
             logging.error(f"Error conectando a la base de datos: {e}")
             raise e
@@ -151,7 +151,7 @@ class DBHandler:
             ORDER BY id_conexiones DESC LIMIT 1
         """)
         result = self.session.execute(select_query, {"correo": correo}).fetchone()
-        logging.info(f"Resultado de consulta get_last_campus: {result}")
+        #logging.info(f"Resultado de consulta get_last_campus: {result}")
         return result[0] if result else None
     
     def get_last_connection_time(self, correo):
@@ -161,7 +161,7 @@ class DBHandler:
             ORDER BY id_conexiones DESC LIMIT 1
         """)
         result = self.session.execute(select_query, {"correo": correo}).fetchone()
-        logging.info(f"Resultado de consulta get_last_connection_time: {result}")
+        #logging.info(f"Resultado de consulta get_last_connection_time: {result}")
         return result[0] if result else None
 
     def commit(self):
@@ -223,7 +223,7 @@ class DataProcessor:
             #Seperar la fecha y la hora
             date   = ts_dt.strftime("%Y-%m-%d")
             time   = ts_dt.strftime("%H:%M:%S")
-            logging.info(f"La fecha: {date}, hora: {time}")
+            #logging.info(f"La fecha: {date}, hora: {time}")
 
 
             # Extraer campus (nombre del punto de acceso)
@@ -234,7 +234,7 @@ class DataProcessor:
                 logging.error(f"No se encontró AP en: {message_text}")
                 return None
             ap_full = ap_match.group(1)
-            logging.info(f"AP encontrado: {ap_full}")
+            #logging.info(f"AP encontrado: {ap_full}")
             # Extraer campus y AP
             try:
                 campus_raw, ap = ap_full.split('-', 1)
@@ -271,7 +271,7 @@ class DataProcessor:
     def _detect_movement(self, datos, last_campus):
         """Metodo encargado de preguntar si el usuario cambio de campus"""
         if last_campus and last_campus != datos['campus']:
-            logging.info(f"Campus actual: {datos['campus']}, Último campus: {last_campus}")
+            #logging.info(f"Campus actual: {datos['campus']}, Último campus: {last_campus}")
             return True
         return False
         
@@ -296,7 +296,7 @@ class DataProcessor:
                     campus_actual=datos['campus'],
                     campus_anterior=last_campus
                 )
-            logging.info(f"El usuario {datos['correo_hash']} se movilizó de {last_campus} a {datos['campus']}.")
+            #logging.info(f"El usuario {datos['correo_hash']} se movilizó de {last_campus} a {datos['campus']}.")
     def _process_connection(self, datos):
         # Aquí actualizaríamos la conexión del usuario si existe,
         # o crearíamos una nueva si no existe
@@ -362,11 +362,6 @@ class MovementNotifier:
         self.enabled = MOVEMENT_NOTIFICATION.get("enabled", False)
         self.target_host = MOVEMENT_NOTIFICATION.get("target_host", "host.docker.internal")
         self.target_port = MOVEMENT_NOTIFICATION.get("target_port", 12201)
-        
-        if self.enabled:
-            logging.info(f"Notificador de movimientos configurado: {self.target_host}:{self.target_port}")
-        else:
-            logging.info("Notificador de movimientos desactivado")
     
     def notify_movement(self, fecha, hora_actual, hora_anterior, campus_actual, campus_anterior):
         """
@@ -383,23 +378,22 @@ class MovementNotifier:
         if isinstance(hora_anterior, tuple) and len(hora_anterior) > 0:
             hora_anterior = hora_anterior[0]
             
-        if isinstance(hora_anterior, timedelta):
-            hora_anterior_str = str(hora_anterior)
-        else:
-            hora_anterior_str = hora_anterior.strftime("%H:%M:%S.%f") if hasattr(hora_anterior, 'strftime') else str(hora_anterior)
+        #if isinstance(hora_anterior, timedelta):
+        #    hora_anterior_str = str(hora_anterior)
+        #else:
+        #    hora_anterior_str = hora_anterior.strftime("%H:%M:%S.%f") if hasattr(hora_anterior, 'strftime') else str(hora_anterior)
             
         # Formatear hora_actual
-        hora_actual_str = hora_actual.strftime("%H:%M:%S")
-        if not self.enabled:
-            logging.debug("Notificaciones desactivadas, no se enviará notificación de movimiento")
-            return
-        fecha = f"{fecha} {hora_actual_str}"
+        #hora_actual_str = hora_actual.strftime("%H:%M:%S")
+        hora_salida  = str(hora_anterior)
+        hora_llegada = str(hora_actual)
+        fecha_iso = f"{fecha}T{hora_llegada}"
         try:
             # Crear el mensaje JSON con los datos del movimiento
             movement_data = {
-                "fecha": datetime.strptime(str(fecha), "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                "hora_llegada": hora_actual_str,
-                "hora_salida": hora_anterior_str,
+                "fecha": fecha_iso,
+                "hora_llegada": hora_llegada,
+                "hora_salida": hora_salida,
                 "campus_actual": campus_actual,
                 "campus_anterior": campus_anterior,
                 "source": "processor"
@@ -425,7 +419,7 @@ class MovementNotifier:
             sock.close()
             
             logging.info(f"Notificación de movimiento enviada: {campus_anterior} → {campus_actual}")
-            logging.info(f"Se estan enviado los datos a : {self.target_host} → {self.target_port}")
+            #logging.info(f"Se estan enviado los datos a : {self.target_host} → {self.target_port}")
         except Exception as e:
             logging.error(f"Error al enviar notificación de movimiento: {e}")
 
