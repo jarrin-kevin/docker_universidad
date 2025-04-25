@@ -4,7 +4,7 @@ import os
 CONFIG_RECEIVER = {
     "host": os.getenv("RECEIVER_HOST", "192.168.1.36"),
     "port": int(os.getenv("RECEIVER_PORT", "12345")),
-    "redis_url": os.getenv("REDIS_URL", "redis://:defaultpassword@redis:6379")
+    "redis_url": os.getenv("REDIS_URL", "redis://:x5xBAO6bdasNXKa@redis:6379")
 }
 
 # Configuración de conexión a MySQL (sin contraseñas en texto plano)
@@ -23,7 +23,7 @@ DATABASE_CONFIG = {
 # URL para conectarse a la base de datos usando SQLAlchemy
 # Sin credenciales reales - serán reemplazadas en tiempo de ejecución
 URL_DATABASE = {
-    "DATABASE_URL": "mysql+mysqlconnector://root:PASSWORD_PLACEHOLDER@{}/{}".format(
+    "DATABASE_URL": "mysql+aiomysql://root:PASSWORD_PLACEHOLDER@{}/{}".format(
         DATABASE_CONFIG["HOST"], 
         DATABASE_CONFIG["DATABASE_NAME"]
     )

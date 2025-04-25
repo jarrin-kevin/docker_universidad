@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-import redis
+import redis.asyncio as aioredis
 import json
 import asyncio
 import logging
@@ -15,6 +15,7 @@ class DataReceiver(ABC): #Clase recibir los datos
     async def receiver_data(self, data: bytes, addr):
         """Método para recibir datos desde un puerto."""
         pass
+
 # Definición de excepción personalizada para errores con Redis
 class RedisNotAvailableError(Exception):
     """Excepción lanzada cuando Redis no está disponible o no se pudo iniciar."""
@@ -25,19 +26,26 @@ class receiver_udp(DataReceiver):
         self.host = host #esto instancia en archivo de configuracion
         self.port = port #esto instancia en archivo de configuracion
         self.redis_url = redis_url #esto instancia en archivo de configuracion
+        #COntadores
+        self._msg_counter  = 0
+        self._log_interval = 100
+        #Expresiones regulares para buscar patrones en los mensajes
+        self.ap_pattern    = re.compile(r'\bAP:(?P<ap>[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)\b')
+        self.email_pattern = re.compile(r'\b(?:user(?:name)?-)?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})')
+        self.ts_pattern    = re.compile(r'timestamp="([^"]+)"')
     def login_info(self): 
        #configura el modulo de loggin para registrar mensajes
        logging.basicConfig( 
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
         )  
-       logging.info("UDP server starting...")     
+       #logging.info("UDP server starting...")     
     
     async def verificar_redis(self):
         """Verifica si Redis está corriendo antes de iniciar el servidor."""
         try:
-            self.redis_client = redis.from_url(self.redis_url)
-            self.redis_client.ping()
+            self.redis_client = aioredis.from_url(self.redis_url)
+            await self.redis_client.ping()
             #logging.info("Conexión con Redis exitosa.")
         except Exception as e:
             logging.error(f"Error conectando a Redis: {e}")
@@ -78,43 +86,64 @@ class receiver_udp(DataReceiver):
                     decoded_message = data.decode("utf-8", errors='ignore')
                     # Intenta procesar como syslog primero
                     logging.info(f"MENSAJE SYSLOG: {decoded_message}")
-                    syslog_result = self.process_syslog_message(decoded_message)
-                    if syslog_result:
-                        # Si se procesó correctamente como syslog, termina
-                        return
+                    self._msg_counter += 1
+                    if self._msg_counter % self._log_interval == 0:
+                        logging.info(f"Procesados {self._msg_counter} mensajes desde el arranque")
+                    
+                    asyncio.create_task(self.process_syslog_message(decoded_message))
                 except Exception as e:
                     logging.error(f"Error procesando mensaje: {e}")
         except Exception as e:
             logging.error(f"Error en la conexión con {client_address}: {e}")
 
-    def process_syslog_message(self, message):
+    async def process_syslog_message(self, message):
         """
         Procesa mensajes con formato syslog (que han sido filtrados por rsyslog-proxy)
-        y los convierte a formato JSON para almacenarlos en Redis.
-    
-        Formato syslog esperado: <prioridad> fecha host mensaje
+        y los convierte a formato JSON para almacenarlos en Redis tomando solo las partes necesarias y tambien busca si hay mensajes repetidos.
         """
         try:
-            # Verificar que el mensaje tenga el formato esperado
-            logging.info("Procesando mensaje syslog tiene, verificar si tiene correo")
-            #email_match = re.search(r'(?:user(?:name)?[-:\s]+|username[-:\s]+)([\w.]+@[\w.]+)', message) antiguo buscador de correo
-            email_match = re.search(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', message)
+            email_match = self.email_pattern.search(message)
             if not email_match:
                 logging.warning("Mensaje descartado: no contiene patrón de correo electrónico")
-                return True  # Retornamos True para indicar que se procesó (aunque se descartó)
+                return True
+            user = email_match.group(1)
+            logging.info(f"Usuario encontrado: {user}")
+
+            ap_match = self.ap_pattern.search(message)
+            if not ap_match:
+                logging.warning("No se encontró AP en: {message}")
+                return None  
+            ap = ap_match.group(1)
+            logging.info(f"AP encontrado: {ap}")
+
+            ts_match = self.ts_pattern.search(message)
+            if not ts_match:
+                logging.error(f"No se encontró timestamp en: {message_text}")
+                return None
+            timestamp = ts_match.group(1)
+
+            logging.info(f"Timestamp encontrado: {timestamp}")
+            # Clave de deduplicado: combina timestamp, AP y usuario
+            dup_key = f"dup:{timestamp}|{ap}|{user}"
+            # Intentar marcar como nuevo en Redis (SET NX EX 300s)
+            is_new = await self.redis_client.set(dup_key, 1, nx=True, ex=120)
+            if not is_new:
+                logging.info("Mensaje duplicado descartado.")
+                return True  # Mensaje duplicado, no se procesa
             
             # Crear un objeto JSON con el formato que espera processor
             json_message = {
-                "message": message  # El mensaje completo - processor extrae la info con regex
+                "user": user,  
+                "ap": ap,
+                "timestamp": timestamp,
             }
             # Convertir a string JSON
             json_str = json.dumps(json_message)
-            #logging.info(f"Mensaje syslog convertido a JSON: {json_str[:200]}...")
-
             # Enviar a Redis
-            asyncio.create_task(
-                asyncio.to_thread(self.redis_client.rpush, "socket_messages", json_str)
-            )
+            #asyncio.create_task(
+            #    asyncio.to_thread(self.redis_client.rpush, "socket_messages", json_str)
+            #)
+            await self.redis_client.rpush("socket_messages", json_str)
             logging.info("Mensaje syslog procesado y enviado a Redis")
             return True
         except Exception as e:
@@ -132,7 +161,7 @@ class UDPServerProtocol:
         
     def datagram_received(self, data, addr):
         # Este método se llama cada vez que se recibe un datagrama UDP
-        logging.info(f"Datagrama recibido de {addr}, tamaño: {len(data)} bytes")
+        #logging.info(f"Datagrama recibido de {addr}, tamaño: {len(data)} bytes")
         asyncio.create_task(self.receiver.receiver_data(data, addr))
 
     def error_received(self, exc):

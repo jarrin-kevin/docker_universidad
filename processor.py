@@ -1,15 +1,19 @@
 # processor.py
+
 import os
 import json
 import socket
 import logging
+import hashlib
 from datetime import datetime,timedelta
-import redis
-from sqlalchemy import create_engine, text
+import asyncio
+import redis.asyncio as aioredis
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
-import hashlib
+
 from config import URL_DATABASE, CONFIG_RECEIVER, DATABASE_CONFIG,MOVEMENT_NOTIFICATION # REDIS_URL debe estar definido, por ejemplo: "redis://localhost:6379"
-import hashlib
 import gender_guesser.detector as gender
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
@@ -30,147 +34,151 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
 class PasswordDecryptor:
-    """Maneja el descifrado de la contraseña de MySQL usando RSA."""
+    #Maneja el descifrado de la contraseña de MySQL usando RSA.
     
     @staticmethod
     def decrypt_password():
         try:
             # Obtener rutas de los archivos secretos
-            private_key_path = DATABASE_CONFIG.get("PRIVATE_KEY_PATH", "/run/secrets/private_key")
-            encrypted_password_path = DATABASE_CONFIG.get("ENCRYPTED_PASSWORD_PATH", "/run/secrets/encrypted_password")
-            
-            #logging.info(f"Descifrando contraseña usando clave privada en: {private_key_path}")
+            priv_path = DATABASE_CONFIG.get('PRIVATE_KEY_PATH', '/run/secrets/private_key')
+            enc_path  = DATABASE_CONFIG.get('ENCRYPTED_PASSWORD_PATH', '/run/secrets/encrypted_password')
             
             # Leer la clave privada
-            with open(private_key_path, 'rb') as key_file:
-                private_key = RSA.import_key(key_file.read())
+            with open(priv_path, 'rb') as kf:
+                key = RSA.import_key(kf.read())
             
             # Leer la contraseña cifrada en modo binario
-            with open(encrypted_password_path, 'rb') as password_file:
-                encrypted_data = password_file.read()
+            with open(enc_path, 'rb') as pf:
+                encrypted = pf.read()
                 # Decodificar Base64 sin manipular el contenido
-                encrypted_password = base64.b64decode(encrypted_data)
-            
-            # Descifrar usando PKCS1_OAEP
-            cipher = PKCS1_OAEP.new(private_key)
-            decrypted_password = cipher.decrypt(encrypted_password)
-            
-            #logging.info("Contraseña descifrada correctamente")
-            return decrypted_password.decode('utf-8')
+            decrypted = PKCS1_OAEP.new(key).decrypt(base64.b64decode(encrypted))
+            return decrypted.decode('utf-8')
         except Exception as e:
-            logging.error(f"Error al descifrar la contraseña: {e}")
-            raise RuntimeError(f"No se pudo descifrar la contraseña: {e}")
-                               
+            logging.error(f"Error descifrando contraseña: {e}")
+            raise   
+DB_PASSWORD = PasswordDecryptor.decrypt_password()                
 class RedisConnector:
     def __init__(self):
         """Conecta a Redis y extrae mensajes de la cola."""
         try:
-            # Usar CONFIG_RECEIVER del módulo config
-            redis_url = CONFIG_RECEIVER["redis_url"]
-            self.redis_client = redis.from_url(redis_url)
-            self.redis_client.ping()
-            #logging.info("Conexión a Redis establecida.")
+            self.url = CONFIG_RECEIVER["redis_url"]
+            self.redis = None
         except Exception as e:
             logging.error(f"Error conectando a Redis: {e}")
             raise 
-        
-    def get_message(self, queue_name="socket_messages", timeout=0):
-        """Espera y extrae un mensaje de la cola Redis."""
+    
+    async def connect(self):
+        self.redis = await aioredis.from_url(self.url)
+    async def get_message(self, queue='socket_messages', timeout=0):
         try:
-            message_data = self.redis_client.blpop(queue_name, timeout=timeout)
-            if message_data:
-                _, message = message_data
-                return message.decode("utf-8")
+            result = await self.redis.blpop(queue, timeout=timeout)
+            if result:
+                _, raw = result
+                return raw
         except Exception as e:
-            logging.error(f"Error al extraer mensaje de Redis: {e}")
-        return None  
-
+            logging.error(f"Error obteniendo mensaje de Redis: {e}")
+        return None
+    async def close(self):
+        await self.redis.aclose()
 
 class DBHandler:
-    """Maneja la conexión a la base de datos y las operaciones SQL."""
+    """Maneja la conexión asíncrona y las operaciones SQL."""
     def __init__(self):
         try:
-            # Obtener la contraseña descifrada
-            decrypted_password = PasswordDecryptor.decrypt_password()
-            
-            # Construir la URL de conexión con la contraseña descifrada
-            database_url = URL_DATABASE["DATABASE_URL"]
-            
-            # Reemplazar el placeholder con la contraseña descifrada
-            database_url = database_url.replace("PASSWORD_PLACEHOLDER", decrypted_password)
-            
-            self.engine = create_engine(database_url)
-            self.Session = sessionmaker(bind=self.engine)
-            self.session = self.Session()
-            #logging.info("Conexión a la base de datos establecida.")
+            # Reemplaza placeholder con la contraseña real
+            db_url = URL_DATABASE['DATABASE_URL'].replace('PASSWORD_PLACEHOLDER', DB_PASSWORD)
+            # Engine asíncrono (p.ej. mysql+aiomysql://...)
+            self.engine = create_async_engine(db_url, echo=False)
+            # Session factory que produce AsyncSession
+            self.Session = sessionmaker(
+                bind=self.engine,
+                class_=AsyncSession,
+                expire_on_commit=False
+            )
         except Exception as e:
             logging.error(f"Error conectando a la base de datos: {e}")
-            raise e
-    def save_to_conexiones(self, correo,sexo, ap, campus, fecha, hora):
-        # Verificar si existe
-        check_query = text("""
-        SELECT id_conexiones FROM conexiones 
-        WHERE correo = :correo AND fecha = :fecha
-        """)
-        result = self.session.execute(check_query, {"correo": correo, "fecha": fecha}).fetchone()
-        if result:
-            #actualizar hora del usuario
-            update_query = text("""
-                UPDATE conexiones 
-                SET ap = :ap, campus = :campus, hora = :hora
-                WHERE correo = :correo AND fecha = :fecha
-            """)
-            self.session.execute(update_query, 
-                {"correo": correo, "ap": ap, "campus": campus, "hora": hora, "fecha": fecha})
-            logging.info("Registro actualizado en conexiones.")
-        else:
-            #Insertar nuevo conexion
-            insert_query = text("""
-            INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
-            VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
-            """)    
-            self.session.execute(insert_query, 
-                {"correo": correo, "sexo": sexo, "ap": ap, "campus": campus, "fecha": fecha, "hora": hora})
-            logging.info("Registro insertado en conexiones.")
-    def save_to_movimientos(self, correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida):
-        query = text("""
-            INSERT INTO movimientos (correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida)
-            VALUES (:correo, :sexo, :campus_anterior, :campus_actual, :fecha, :hora_llegada, :hora_salida)
-        """)
-        self.session.execute(query, {"correo": correo, "sexo": sexo, "campus_anterior": campus_anterior, 
-                                    "campus_actual": campus_actual, "fecha": fecha, 
-                                    "hora_llegada": hora_llegada, "hora_salida": hora_salida})
-        logging.info("Registro insertado en movimientos.")
-    
+            raise
 
-    def get_last_campus(self, correo):
-        select_query = text("""
-            SELECT campus FROM conexiones
-            WHERE correo = :correo
-            ORDER BY id_conexiones DESC LIMIT 1
-        """)
-        result = self.session.execute(select_query, {"correo": correo}).fetchone()
-        #logging.info(f"Resultado de consulta get_last_campus: {result}")
-        return result[0] if result else None
-    
-    def get_last_connection_time(self, correo):
-        select_query = text("""
-            SELECT hora FROM conexiones
-            WHERE correo = :correo
-            ORDER BY id_conexiones DESC LIMIT 1
-        """)
-        result = self.session.execute(select_query, {"correo": correo}).fetchone()
-        #logging.info(f"Resultado de consulta get_last_connection_time: {result}")
-        return result[0] if result else None
+    async def save_to_conexiones(self, correo, sexo, ap, campus, fecha, hora):
+        """Inserta o actualiza en 'conexiones' usando upsert de MySQL."""
+        async with self.Session() as sess:
+            stmt = text(
+                """
+                INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
+                VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
+                ON DUPLICATE KEY UPDATE
+                  ap     = VALUES(ap),
+                  campus = VALUES(campus),
+                  hora   = VALUES(hora);
+                """
+            )
+            params = {
+                "correo": correo,
+                "sexo": sexo,
+                "ap": ap,
+                "campus": campus,
+                "fecha": fecha,
+                "hora": hora
+            }
+            await sess.execute(stmt, params)
+            await sess.commit()
+            logging.info("Registro en conexiones")
 
-    def commit(self):
-        self.session.commit()
-    def rollback(self):
-        self.session.rollback()
-    def close(self):
-        self.session.close()
-        logging.info("Sesión de la base de datos cerrada.")
+    async def save_to_movimientos(self, correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida):
+        """Inserta un registro en 'movimientos'."""
+        async with self.Session() as sess:
+            stmt = text(
+                """
+                INSERT INTO movimientos (correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida)
+                VALUES (:correo, :sexo, :campus_anterior, :campus_actual, :fecha, :hora_llegada, :hora_salida);
+                """
+            )
+            params = {
+                "correo": correo,
+                "sexo": sexo,
+                "campus_anterior": campus_anterior,
+                "campus_actual": campus_actual,
+                "fecha": fecha,
+                "hora_llegada": hora_llegada,
+                "hora_salida": hora_salida
+            }
+            await sess.execute(stmt, params)
+            await sess.commit()
+            logging.info("Registro insertado en movimientos: moved %s → %s", campus_anterior, campus_actual)
+
+    async def get_last_campus(self, correo):
+        """Devuelve el último campus registrado para el usuario (o None)."""
+        async with self.Session() as sess:
+            result = await sess.execute(
+                text(
+                    "SELECT campus"
+                    " FROM conexiones"
+                    " WHERE correo = :correo"
+                    " ORDER BY id_conexiones DESC"
+                    " LIMIT 1"
+                ),
+                {"correo": correo}
+            )
+            row = result.fetchone()
+            return row[0] if row else None
+
+    async def get_last_connection_time(self, correo):
+        """Devuelve la última hora de conexión registrada para el usuario (o None)."""
+        async with self.Session() as sess:
+            result = await sess.execute(
+                text(
+                    "SELECT hora"
+                    " FROM conexiones"
+                    " WHERE correo = :correo"
+                    " ORDER BY id_conexiones DESC"
+                    " LIMIT 1"
+                ),
+                {"correo": correo}
+            )
+            row = result.fetchone()
+            return row[0] if row else None
     
 class DataProcessor:
     """Procesa cada mensaje y aplica la lógica de negocio usando DBHandler:
@@ -183,13 +191,7 @@ class DataProcessor:
         :param session: Sesión activa de SQLAlchemy."""
     def __init__(self, db_handler, movement_notifier):
         self.db_handler = db_handler #llama a db_hanbler la clase que se encarga de conectarse a sql y ejecutar las sentencias sql
-        self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus
-
-        # Precompila aquí los patrones una sola vez por instancia
-        self.ts_pattern    = re.compile(r'([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})')
-        self.ap_pattern    = re.compile(r'\bAP:(?P<ap>[A-Z0-9]+(?:-[A-Z0-9]+)*)\b')
-        self.email_pattern = re.compile(r'([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})')
-    
+        self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus    
     def _normalizar_campus(self, campus_raw):
         """Normaliza los diferentes nombres de campus a las dos categorías principales"""
         # Mapeo de alias a nombres estandarizados
@@ -198,8 +200,10 @@ class DataProcessor:
             'Comisariato': 'CENTRAl',
             'CBAL': 'BALZAY',
             'balzay': 'BALZAY',
+            'Balzay': 'BALZAY',
             'CREDU': 'CENTRAL',
-            'credu': 'CENTRAL'
+            'credu': 'CENTRAL',
+            'Credu': 'CENTRAL',
             # Añadir más alias según sea necesario
         }
         return campus_map.get(campus_raw, campus_raw)
@@ -210,52 +214,24 @@ class DataProcessor:
             data = json.loads(message)
             logging.info(f"Mensaje recibido: {data}")
             #obtener mensaje dentro de ahi tengo: ap(campus-ap),user(correo hash),timestamp
-            message_text = data.get('message', '') or data.get('_message', '')
-
-            #Extrear la fecha y la hora y formatear
-            #timestamp_match = re.search(r'([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})', message_text)
-            ts_match = self.ts_pattern.search(message_text)
-            if not ts_match:
-                logging.error(f"No se encontró timestamp en: {message_text}")
-                return None
-            ts_str = ts_match.group(1)
-            ts_dt  = datetime.strptime(ts_str, "%b %d %H:%M:%S %Y")
+            ap = data.get('ap', '') or data.get('_message', '')
+            user = data.get('user', '') or data.get('_user', '')
+            timestamp = data.get('timestamp', '') or data.get('_timestamp', '')
+            ts_dt  = datetime.strptime(timestamp, "%b %d %H:%M:%S %Y")
             #Seperar la fecha y la hora
             date   = ts_dt.strftime("%Y-%m-%d")
             time   = ts_dt.strftime("%H:%M:%S")
-            #logging.info(f"La fecha: {date}, hora: {time}")
-
-
-            # Extraer campus (nombre del punto de acceso)
-            #ap_match = re.search(r'\bAP:(?P<ap>[A-Z0-9]+(?:-[A-Z0-9]+)*)\b', message_text)
-
-            ap_match = self.ap_pattern.search(message_text)
-            if not ap_match:
-                logging.error(f"No se encontró AP en: {message_text}")
-                return None
-            ap_full = ap_match.group(1)
-            #logging.info(f"AP encontrado: {ap_full}")
-            # Extraer campus y AP
+            # Extraer el nombre del usuario (correo)
             try:
-                campus_raw, ap = ap_full.split('-', 1)
+                campus_raw, ap = ap.split('-', 1)
                 campus = self._normalizar_campus(campus_raw)
             except Exception as e:
                 logging.error(f"Error al dividir _ap_name_: {e}")
                 return None
-            
-
-            # Extraer nombre de usuario (correo electrónico)
-            #email_match = re.search(r'([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})', message_text)
-            email_match = self.email_pattern.search(message_text)
-            if not email_match:
-                logging.error(f"No se encontró email en: {message_text}")
-                return None
-            user = email_match.group(1)
+    
             # Con el correo, se procede a inferir en el genero y hashear el correo
             gender_inferred = self._infer_gender(user)
             correo_hash = hashlib.sha256(user.encode("utf-8")).hexdigest()
-            # Normalizar el nombre del campus
-            campus = self._normalizar_campus(campus)
             return {
                 'correo_hash': correo_hash,
                 'gender': gender_inferred,
@@ -268,18 +244,15 @@ class DataProcessor:
             logging.error(f"Error al decodificar JSON: {e}")
             return None
             
-    def _detect_movement(self, datos, last_campus):
+    async def detect_movement(self, datos, last_campus):
         """Metodo encargado de preguntar si el usuario cambio de campus"""
-        if last_campus and last_campus != datos['campus']:
-            #logging.info(f"Campus actual: {datos['campus']}, Último campus: {last_campus}")
-            return True
-        return False
+        return last_campus and last_campus != datos['campus']
         
-    def _handle_movement(self, datos, last_campus):
+    async def handle_movement(self, datos, last_campus):
         """Método encargado de obtener la última conexión del usuario que cambió de campus y guardar el registro en la base"""
-        hora_anterior = self.db_handler.get_last_connection_time(datos['correo_hash'])
+        hora_anterior = await self.db_handler.get_last_connection_time(datos['correo_hash'])
         if hora_anterior:
-            self.db_handler.save_to_movimientos(
+            await self.db_handler.save_to_movimientos(
                 datos['correo_hash'], 
                 datos['gender'], 
                 last_campus, 
@@ -288,7 +261,7 @@ class DataProcessor:
                 datos['hora'],
                 hora_anterior
             )
-            if self.movement_notifier:
+            if self.movement_notifier.enabled:
                 self.movement_notifier.notify_movement(
                     fecha=datos['fecha'],
                     hora_actual=datos['hora'],
@@ -297,10 +270,10 @@ class DataProcessor:
                     campus_anterior=last_campus
                 )
             #logging.info(f"El usuario {datos['correo_hash']} se movilizó de {last_campus} a {datos['campus']}.")
-    def _process_connection(self, datos):
+    async def _process_connection(self, datos):
         # Aquí actualizaríamos la conexión del usuario si existe,
         # o crearíamos una nueva si no existe
-        self.db_handler.save_to_conexiones(
+        await self.db_handler.save_to_conexiones(
             datos['correo_hash'], 
             datos['gender'],
             datos['ap'],
@@ -308,21 +281,19 @@ class DataProcessor:
             datos['fecha'],
             datos['hora']
         )
-    def process_message(self, message):
+    async def process_message(self, message):
         try:
             datos = self._parse_message(message)
             if not datos:
                 return
             # Consultar el último campus registrado para este usuario
-            last_campus = self.db_handler.get_last_campus(datos['correo_hash'])
+            last_campus = await self.db_handler.get_last_campus(datos['correo_hash'])
             # Si hay registro previo y el campus es distinto, registrar el movimiento
-            if self._detect_movement(datos, last_campus): #un if para llamar un metodo que tiene otro if?
-                self._handle_movement(datos, last_campus) #guardar en movimientos
-            self._process_connection(datos)
-            self.db_handler.commit()
+            if await self.detect_movement(datos, last_campus): #
+                await self.handle_movement(datos, last_campus) #guardar en movimientos
+            await self._process_connection(datos)
         except Exception as e:
             logging.error(f"Error procesando mensaje: {e}")
-            self.db_handler.rollback()
     def _infer_gender(self, user):
         """Infiere el género basado en el nombre del usuario."""
         try:
@@ -374,15 +345,9 @@ class MovementNotifier:
             campus_actual (str): Campus actual del usuario
             campus_anterior (str): Campus anterior del usuario
         """
- # Primero verifica si hora_anterior es una tupla y extraer el primer elemento si es necesario
+        # Primero verifica si hora_anterior es una tupla y extraer el primer elemento si es necesario
         if isinstance(hora_anterior, tuple) and len(hora_anterior) > 0:
             hora_anterior = hora_anterior[0]
-            
-        #if isinstance(hora_anterior, timedelta):
-        #    hora_anterior_str = str(hora_anterior)
-        #else:
-        #    hora_anterior_str = hora_anterior.strftime("%H:%M:%S.%f") if hasattr(hora_anterior, 'strftime') else str(hora_anterior)
-            
         # Formatear hora_actual
         #hora_actual_str = hora_actual.strftime("%H:%M:%S")
         hora_salida  = str(hora_anterior)
@@ -406,16 +371,6 @@ class MovementNotifier:
             # Enviar datos - para UDP no necesitamos conectar primero
             sock.sendto(message.encode('utf-8'), (self.target_host, self.target_port))
             logging.info(f"Mensaje UDP enviado: {message}")
-
-            # Crear socket TCP
-            #sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            # Conectar al host y puerto configurados
-            #sock.connect((self.target_host, self.target_port))
-            # Enviar datos
-            #sock.sendall(message.encode('utf-8'))
-            #logging.info(f"Mensaje enviado: {message}")
-            
-            # Cerrar la conexión
             sock.close()
             
             logging.info(f"Notificación de movimiento enviada: {campus_anterior} → {campus_actual}")
@@ -423,9 +378,11 @@ class MovementNotifier:
         except Exception as e:
             logging.error(f"Error al enviar notificación de movimiento: {e}")
 
-def main():
+async def main():
     try:
         redis_connector = RedisConnector()
+        await redis_connector.connect()
+
         db_handler = DBHandler()
         movement_notifier = MovementNotifier()  # Crear instancia
         data_processor = DataProcessor(db_handler,movement_notifier)
@@ -433,17 +390,16 @@ def main():
         logging.info("Iniciando procesador de mensajes...")
         
         while True:
-            message = redis_connector.get_message("socket_messages", timeout=0)
+            message = await redis_connector.get_message("socket_messages", timeout=0)
             if message:
-                data_processor.process_message(message)
+                await data_processor.process_message(message)
                 
     except KeyboardInterrupt:
         logging.info("Proceso interrumpido por el usuario.")
     except Exception as e:
         logging.error(f"Error en el procesamiento principal: {e}")
     finally:
-        if 'db_handler' in locals():
-            db_handler.close()
+        await redis_connector.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

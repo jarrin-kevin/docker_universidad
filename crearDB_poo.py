@@ -92,7 +92,13 @@ class DatabaseSetup:
             # Crear las tablas definidas en los modelos
             for table in self.tables:
                 table.create_table(self.cursor)
-            
+            self.execute_query(
+                """
+                ALTER TABLE conexiones
+                  ADD UNIQUE INDEX ux_conexiones_correo_fecha (correo, fecha);
+                """,
+                "Índice único ux_conexiones_correo_fecha creado."
+            )
             # Confirmar la transacción
             self.connection.commit()
     
