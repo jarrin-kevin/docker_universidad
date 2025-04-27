@@ -82,6 +82,8 @@ class RedisConnector:
         return None
     async def close(self):
         await self.redis.aclose()
+    async def get_key(self, key):    return await self.redis.get(key)
+    async def set_key(self, key, v, ex): return await self.redis.set(key, v, ex=ex)
 
 class DBHandler:
     """Maneja la conexión asíncrona y las operaciones SQL."""
@@ -90,7 +92,13 @@ class DBHandler:
             # Reemplaza placeholder con la contraseña real
             db_url = URL_DATABASE['DATABASE_URL'].replace('PASSWORD_PLACEHOLDER', DB_PASSWORD)
             # Engine asíncrono (p.ej. mysql+aiomysql://...)
-            self.engine = create_async_engine(db_url, echo=False)
+            self.engine = create_async_engine(
+                db_url,
+                echo=False,
+                pool_size=100,
+                max_overflow=200,
+                pool_timeout=1,
+            )
             # Session factory que produce AsyncSession
             self.Session = sessionmaker(
                 bind=self.engine,
@@ -146,7 +154,7 @@ class DBHandler:
             }
             await sess.execute(stmt, params)
             await sess.commit()
-            logging.info("Registro insertado en movimientos: moved %s → %s", campus_anterior, campus_actual)
+            #logging.info("Registro insertado en movimientos: moved %s → %s", campus_anterior, campus_actual)
 
     async def get_last_campus(self, correo):
         """Devuelve el último campus registrado para el usuario (o None)."""
@@ -189,9 +197,19 @@ class DataProcessor:
         - Inserta un registro en 'conexiones' y, si es necesario, en 'movimientos'.
         :param message: Cadena de texto con formato JSON.
         :param session: Sesión activa de SQLAlchemy."""
-    def __init__(self, db_handler, movement_notifier):
+    def __init__(self, db_handler, movement_notifier, redis_connector):
         self.db_handler = db_handler #llama a db_hanbler la clase que se encarga de conectarse a sql y ejecutar las sentencias sql
-        self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus    
+        self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus
+        self.redis = redis_connector
+        self.redis_client    = redis_connector.redis   # ¡este es el cliente real!
+
+        #detector de genero precompilado
+        self.gender_detector = gender.Detector(case_sensitive=False)
+        # Colas internas
+        self._conn_queue = []   # para upserts en 'conexiones'
+        self._mov_queue  = []   # para inserts en 'movimientos'
+        # Task de flush periódico
+        asyncio.create_task(self._flush_loop())   
     def _normalizar_campus(self, campus_raw):
         """Normaliza los diferentes nombres de campus a las dos categorías principales"""
         # Mapeo de alias a nombres estandarizados
@@ -212,7 +230,7 @@ class DataProcessor:
         """Metodo encargado de recibir los datos y extraer la informacion necesario del mismo"""
         try:
             data = json.loads(message)
-            logging.info(f"Mensaje recibido: {data}")
+            #logging.info(f"Mensaje recibido: {data}")
             #obtener mensaje dentro de ahi tengo: ap(campus-ap),user(correo hash),timestamp
             ap = data.get('ap', '') or data.get('_message', '')
             user = data.get('user', '') or data.get('_user', '')
@@ -287,20 +305,116 @@ class DataProcessor:
             if not datos:
                 return
             # Consultar el último campus registrado para este usuario
-            last_campus = await self.db_handler.get_last_campus(datos['correo_hash'])
-            # Si hay registro previo y el campus es distinto, registrar el movimiento
-            if await self.detect_movement(datos, last_campus): #
-                await self.handle_movement(datos, last_campus) #guardar en movimientos
-            await self._process_connection(datos)
+            correo = datos['correo_hash']
+            last = await self._get_last_campus_cached(correo)
+            # Si hubo movimiento, encolamos el registro de movimiento
+            if last and last != datos['campus']:
+                # obtenemos hora_salida antes de encolar
+                hora_salida = await self.db_handler.get_last_connection_time(correo)
+                self._mov_queue.append((
+                    correo, datos['gender'],
+                    last, datos['campus'],
+                    datos['fecha'], datos['hora'],
+                    hora_salida
+                ))
+                # notificación inmediata
+                if self.movement_notifier.enabled:
+                    self.movement_notifier.notify_movement(
+                        fecha=datos['fecha'],
+                        hora_actual=datos['hora'],
+                        hora_anterior=hora_salida,
+                        campus_actual=datos['campus'],
+                        campus_anterior=last
+                    )
+                # actualizamos cache
+                await self.redis_client.set(f"last_campus:{correo}", datos['campus'], ex=300)
+            # Encolamos el upsert de conexión
+            self._conn_queue.append((
+                correo, datos['gender'], datos['ap'],
+                datos['campus'], datos['fecha'], datos['hora']
+            ))
+            #await self._process_connection(datos)
         except Exception as e:
             logging.error(f"Error procesando mensaje: {e}")
+    
+    async def _flush_loop(self):
+        while True:
+            # Si la cola crece demasiado, flush inmediato          # intervalo de flush
+            if len(self._conn_queue) >= 10000 or len(self._mov_queue) >= 10000:
+                await self._flush_batches()
+                continue
+            # Si no, espera un segundo y luego flush
+            await asyncio.sleep(5)
+            await self._flush_batches()
+    
+    
+    async def _flush_batches(self):
+        BATCH_MAX = 20000
+        batch = self._conn_queue[:BATCH_MAX]
+        # Flush de conexiones
+        if batch:
+            # abrimos una transacción en el engine
+            async with self.db_handler.engine.begin() as conn:
+                stmt_conn = text("""
+                  INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
+                  VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
+                  ON DUPLICATE KEY UPDATE
+                    ap     = VALUES(ap),
+                    campus = VALUES(campus),
+                    hora   = VALUES(hora)
+                """)
+                await conn.execute(
+                    stmt_conn,
+                    [
+                        {
+                            "correo": vals[0],
+                            "sexo": vals[1],
+                            "ap": vals[2],
+                            "campus": vals[3],
+                            "fecha": vals[4],
+                            "hora": vals[5]
+                        }
+                        for vals in batch
+                    ]
+                )
+            del self._conn_queue[:len(batch)]
+
+        # Flush de movimientos
+        batch = self._mov_queue[:BATCH_MAX]
+        if batch:
+            async with self.db_handler.engine.begin() as conn:
+                stmt_mov = text("""
+                  INSERT INTO movimientos (
+                    correo, sexo, campus_anterior, campus_actual,
+                    fecha, hora_llegada, hora_salida
+                  ) VALUES (
+                    :correo, :sexo, :campus_anterior, :campus_actual,
+                    :fecha, :llegada, :salida
+                  )
+                """)
+                await conn.execute(
+                    stmt_mov,
+                    [
+                        {
+                            "correo": vals[0],
+                            "sexo": vals[1],
+                            "campus_anterior": vals[2],
+                            "campus_actual": vals[3],
+                            "fecha": vals[4],
+                            "hora_llegada": vals[5],
+                            "hora_salida": vals[6]
+                        }
+                        for vals in batch
+                    ]
+                )
+            del self._mov_queue[:len(batch)]
+
     def _infer_gender(self, user):
         """Infiere el género basado en el nombre del usuario."""
         try:
-            local_part = user.split('@')[0]
-            name = local_part.split('.')[0].lower()
-            detector = gender.Detector(case_sensitive=False)
-            detected = detector.get_gender(name)
+            local = user.split('@', 1)[0].lower()
+            name = local.split('.', 1)[0]
+            detected = self.gender_detector.get_gender(name)
         
             if detected in ("male", "mostly_male"):
                 return "hombre"
@@ -324,7 +438,16 @@ class DataProcessor:
                     return "desconocido"
         except Exception:
             return "desconocido"
-
+    async def _get_last_campus_cached(self, correo_hash):
+        key = f"last_campus:{correo_hash}"
+        last = await self.redis_client.get(key)
+        if last:
+            return last.decode()    # viene en bytes
+        # Si no está en cache, lo traemos de BD y lo guardamos
+        last = await self.db_handler.get_last_campus(correo_hash)
+        if last:
+            await self.redis_client.set(key, last, ex=300)
+        return last
 class MovementNotifier:
     """Clase que maneja el envío de notificaciones TCP cuando un usuario se mueve entre campus."""
     
@@ -333,7 +456,7 @@ class MovementNotifier:
         self.enabled = MOVEMENT_NOTIFICATION.get("enabled", False)
         self.target_host = MOVEMENT_NOTIFICATION.get("target_host", "host.docker.internal")
         self.target_port = MOVEMENT_NOTIFICATION.get("target_port", 12201)
-    
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
     def notify_movement(self, fecha, hora_actual, hora_anterior, campus_actual, campus_anterior):
         """
         Envía una notificación TCP cuando un usuario se mueve entre campus.
@@ -365,15 +488,14 @@ class MovementNotifier:
             }
             
             # Convertir a JSON y añadir un salto de línea para delimitar mensajes
-            message = json.dumps(movement_data) + "\n"
-            # Crear socket UDP en lugar de TCP
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)            
+            message = json.dumps(movement_data) + "\n"           
             # Enviar datos - para UDP no necesitamos conectar primero
-            sock.sendto(message.encode('utf-8'), (self.target_host, self.target_port))
-            logging.info(f"Mensaje UDP enviado: {message}")
-            sock.close()
+            self.sock.sendto(message.encode('utf-8'), (self.target_host, self.target_port))
+            #logging.info(f"Mensaje UDP enviado: {message}")
+            #self.sock.close()
             
             logging.info(f"Notificación de movimiento enviada: {campus_anterior} → {campus_actual}")
+
             #logging.info(f"Se estan enviado los datos a : {self.target_host} → {self.target_port}")
         except Exception as e:
             logging.error(f"Error al enviar notificación de movimiento: {e}")
@@ -385,7 +507,7 @@ async def main():
 
         db_handler = DBHandler()
         movement_notifier = MovementNotifier()  # Crear instancia
-        data_processor = DataProcessor(db_handler,movement_notifier)
+        data_processor = DataProcessor(db_handler,movement_notifier,redis_connector)
         
         logging.info("Iniciando procesador de mensajes...")
         

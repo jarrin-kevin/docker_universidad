@@ -75,6 +75,10 @@ class receiver_udp(DataReceiver):
 
 
     async def receiver_data(self, data, addr):
+        msg = data.decode('utf-8', errors='ignore').strip()
+        if msg == 'ping':
+            self.transport.sendto(b'pong', addr)
+            return  # no procesar nada más
         client_address = addr
         try:
             # En UDP los datagramas llegan completos, no hay concepto de "fragmentos"
@@ -118,7 +122,7 @@ class receiver_udp(DataReceiver):
 
             ts_match = self.ts_pattern.search(message)
             if not ts_match:
-                logging.error(f"No se encontró timestamp en: {message_text}")
+                logging.error(f"No se encontró timestamp en: {message}")
                 return None
             timestamp = ts_match.group(1)
 

@@ -35,8 +35,10 @@ RUN mkdir -p /run/secrets && \
 USER appuser
 
 # Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD python -c "import redis, os; r = redis.from_url(os.environ.get('REDIS_URL', 'redis://localhost')); r.ping()"
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
+  CMD bash -c "echo -n ping >/dev/udp/localhost/12349 && \
+               IFS= read -t 1 -u 0 response < /dev/udp/localhost/12349 && \
+               [ \"$response\" = pong ]"
 
 # Ejecutar script
 CMD ["sh", "-c", "python processor.py || sleep 3600"]

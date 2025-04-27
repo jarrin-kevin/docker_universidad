@@ -80,34 +80,51 @@ class DatabaseSetup:
 
 
     def setup_database(self):
-        """Crea la base de datos, selecciona la DB, crea las tablas y configura el usuario."""
         try:
-            self.connect() #Aqui llamo la funcion connect
+            self.connect()
 
-            
-            # Seleccionar la base de datos
-            use_db_query = f"USE {DatabaseConfig.DATABASE_NAME};"
-            self.execute_query(use_db_query, f"Usando base de datos '{DatabaseConfig.DATABASE_NAME}'.")
+            # 1) Selección de la BD y activación del scheduler
+            self.execute_query(f"USE {DatabaseConfig.DATABASE_NAME};",
+                               f"Usando base de datos '{DatabaseConfig.DATABASE_NAME}'.")
             self.execute_query("SET GLOBAL event_scheduler = ON;", "Event scheduler activado.")
-            # Crear las tablas definidas en los modelos
+
+            # 2) Creación de tablas
             for table in self.tables:
                 table.create_table(self.cursor)
-            self.execute_query(
-                """
-                ALTER TABLE conexiones
-                  ADD UNIQUE INDEX ux_conexiones_correo_fecha (correo, fecha);
-                """,
-                "Índice único ux_conexiones_correo_fecha creado."
-            )
-            # Confirmar la transacción
+
+            # 3) Comprobación de existencia del índice
+            #    (NOTA: esto hace un f-string para inyectar el nombre de la BD directamente)
+            self.cursor.execute(f"""
+                SELECT COUNT(1)
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE table_schema = '{DatabaseConfig.DATABASE_NAME}'
+                AND table_name   = 'conexiones'
+                AND index_name   = 'ux_conexiones_correo_fecha'
+            """)
+            exists = self.cursor.fetchone()[0]
+
+            # 4) Solo creamos el índice si no existe
+            if not exists:
+                self.execute_query(
+                    """
+                    ALTER TABLE conexiones
+                    ADD UNIQUE INDEX ux_conexiones_correo_fecha (correo, fecha);
+                    """,
+                    "Índice único ux_conexiones_correo_fecha creado."
+                )
+            else:
+                print("Índice ux_conexiones_correo_fecha ya existe; omitiendo creación.")
+
+            # 5) Confirmar todo
             self.connection.commit()
-    
+
         except mysql.connector.Error as err:
             print(f"Error durante la configuración: {err}")
             if self.connection and self.connection.is_connected():
                 self.connection.rollback()
         finally:
             self.close()
+
 
     def close(self):
         """Cierra el cursor y la conexión para liberar recursos."""

@@ -6,12 +6,38 @@ version: "2.4"
 #    file: ./secrets/encrypted_password.txt
 #  plain_password:
 #    file: ./secrets/plain_password.txt
+
 services:
+  receiver:
+    build:
+      context: .
+      dockerfile: Dockerfile.receiver
+    environment:
+      - RECEIVER_HOST=0.0.0.0
+      - RECEIVER_PORT=12345
+      - REDIS_URL=redis://:x5xBAO6bdasNXKa@redis:6379
+    container_name: receiver
+    hostname: receiver
+    ports:
+      - "12345:12345/udp"
+      - "12348:12348/udp"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    mem_limit: 1g
+    cpus: 1.0
+
+
   rsyslog-proxy: #Servicio rsyslog-proxy
      build:
        context: ./rsyslogproxy
        dockerfile: Dockerfile
      container_name: rsyslog-proxy
+     depends_on:
+      receiver:
+        condition: service_started
      ports:
        - "514:514"
        - "514:514/udp"
@@ -21,7 +47,7 @@ services:
        - backend
      restart: unless-stopped
      mem_limit: 1000m
-     cpus: 0.25
+     cpus: 0.15
 
 
   mysql:
@@ -48,7 +74,7 @@ services:
     networks:
       - backend
     mem_limit: 700m
-    cpus: 0.5
+    cpus: 0.2
   redis:
     image: redis:6.2
     restart: always
@@ -64,7 +90,7 @@ services:
     networks:
       - backend
     mem_limit: 1000m
-    cpus: 0.5
+    cpus: 0.3
 
 
   dbinit:
@@ -89,23 +115,7 @@ services:
       - backend
 
 
-  receiver:
-    build:
-      context: .
-      dockerfile: Dockerfile.receiver
-    environment:
-      - RECEIVER_HOST=0.0.0.0
-      - RECEIVER_PORT=12345
-      - REDIS_URL=redis://:x5xBAO6bdasNXKa@redis:6379
-    ports:
-      - "12345:12345/udp"
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - backend
-    mem_limit: 1g
-    cpus: 1.0
+
 
   processor:
     user: root  # Añade esta línea para depurar
@@ -122,6 +132,7 @@ services:
       - ENCRYPTED_PASSWORD_PATH=/run/secrets/encrypted_password
     ports:
       - "12347:12347/udp"
+      - "12349:12349/udp"
     depends_on:
       mysql:
         condition: service_healthy
@@ -132,7 +143,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     mem_limit: 2g
-    cpus: 2.0
+    cpus: 2.5
 
 
 networks:
