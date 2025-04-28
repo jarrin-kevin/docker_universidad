@@ -132,7 +132,7 @@ class DBHandler:
             }
             await sess.execute(stmt, params)
             await sess.commit()
-            logging.info("Registro en conexiones")
+            #logging.info("Registro en conexiones")
 
     async def save_to_movimientos(self, correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida):
         """Inserta un registro en 'movimientos'."""
@@ -344,71 +344,82 @@ class DataProcessor:
                 await self._flush_batches()
                 continue
             # Si no, espera un segundo y luego flush
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
             await self._flush_batches()
     
     
     async def _flush_batches(self):
-        BATCH_MAX = 200000
-        batch = self._conn_queue[:BATCH_MAX]
-        # Flush de conexiones
-        if batch:
-            # abrimos una transacción en el engine
-            async with self.db_handler.engine.begin() as conn:
-                stmt_conn = text("""
-                  INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
-                  VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
-                  ON DUPLICATE KEY UPDATE
-                    ap     = VALUES(ap),
-                    campus = VALUES(campus),
-                    hora   = VALUES(hora)
-                """)
-                await conn.execute(
-                    stmt_conn,
-                    [
-                        {
-                            "correo": vals[0],
-                            "sexo": vals[1],
-                            "ap": vals[2],
-                            "campus": vals[3],
-                            "fecha": vals[4],
-                            "hora": vals[5]
-                        }
-                        for vals in batch
-                    ]
-                )
-            del self._conn_queue[:len(batch)]
+        try:
+            #logging.info(">> Entrando a _flush_batches()")
+            BATCH_MAX = 200000
+            batch = self._conn_queue[:BATCH_MAX]
+            # Flush de conexiones
+            if batch:
+                # abrimos una transacción en el engine
+                #logging.info(f"Flushing {len(batch)} conexiones a BD")
+                async with self.db_handler.engine.begin() as conn:
+                    stmt_conn = text("""
+                      INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
+                      VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
+                      ON DUPLICATE KEY UPDATE
+                        ap     = VALUES(ap),
+                        campus = VALUES(campus),
+                        hora   = VALUES(hora)
+                    """)
+                    result=await conn.execute(
+                        stmt_conn,
+                        [
+                            {
+                                "correo": vals[0],
+                                "sexo": vals[1],
+                                "ap": vals[2],
+                                "campus": vals[3],
+                                "fecha": vals[4],
+                                "hora": vals[5]
+                            }
+                            for vals in batch
+                        ]
+                    )
+                    #logging.info(f"→ Conexiones: filas afectadas = {result.rowcount}")
+                del self._conn_queue[:len(batch)]
+                #logging.info("→ Conexiones flush exitoso")
 
-        # Flush de movimientos
-        batch = self._mov_queue[:BATCH_MAX]
-        if batch:
-            async with self.db_handler.engine.begin() as conn:
-                stmt_mov = text("""
-                  INSERT INTO movimientos (
-                    correo, sexo, campus_anterior, campus_actual,
-                    fecha, hora_llegada, hora_salida
-                  ) VALUES (
-                    :correo, :sexo, :campus_anterior, :campus_actual,
-                    :fecha, :llegada, :salida
-                  )
-                """)
-                await conn.execute(
-                    stmt_mov,
-                    [
-                        {
-                            "correo": vals[0],
-                            "sexo": vals[1],
-                            "campus_anterior": vals[2],
-                            "campus_actual": vals[3],
-                            "fecha": vals[4],
-                            "hora_llegada": vals[5],
-                            "hora_salida": vals[6]
-                        }
-                        for vals in batch
-                    ]
-                )
-            del self._mov_queue[:len(batch)]
-
+            # Flush de movimientos
+            mov_batch = self._mov_queue[:BATCH_MAX]
+            if mov_batch:
+                #logging.info(f"Flushing {len(mov_batch)} movimientos a BD")
+                async with self.db_handler.engine.begin() as conn:
+                    stmt_mov = text("""
+                    INSERT INTO movimientos (
+                        correo, sexo, campus_anterior, campus_actual,
+                        fecha, hora_llegada, hora_salida
+                    ) VALUES (
+                        :correo, :sexo, :campus_anterior, :campus_actual,
+                        :fecha, :hora_llegada, :hora_salida
+                    )
+                    """)
+                    result=await conn.execute(
+                        stmt_mov,
+                        [
+                            {
+                                "correo": vals[0],
+                                "sexo": vals[1],
+                                "campus_anterior": vals[2],
+                                "campus_actual": vals[3],
+                                "fecha": vals[4],
+                                "hora_llegada": vals[5],
+                                "hora_salida": vals[6]
+                            }
+                            for vals in mov_batch
+                        ]
+                    )
+                    #logging.info(f"→ Movimientos: filas afectadas = {result.rowcount}")
+                del self._mov_queue[:len(mov_batch)]
+                #logging.info("→ Movimientos flush exitoso")
+            #logging.info("<< Saliendo de _flush_batches()")
+        except Exception as e:
+            logging.error(f"Error en _flush_batches: {e}")
+            
     def _infer_gender(self, user):
         """Infiere el género basado en el nombre del usuario."""
         try:
