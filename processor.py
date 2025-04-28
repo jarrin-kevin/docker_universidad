@@ -95,8 +95,8 @@ class DBHandler:
             self.engine = create_async_engine(
                 db_url,
                 echo=False,
-                pool_size=100,
-                max_overflow=200,
+                pool_size=10000,
+                max_overflow=20000,
                 pool_timeout=1,
             )
             # Session factory que produce AsyncSession
@@ -340,7 +340,7 @@ class DataProcessor:
     async def _flush_loop(self):
         while True:
             # Si la cola crece demasiado, flush inmediato          # intervalo de flush
-            if len(self._conn_queue) >= 10000 or len(self._mov_queue) >= 10000:
+            if len(self._conn_queue) >= 100000 or len(self._mov_queue) >= 100000:
                 await self._flush_batches()
                 continue
             # Si no, espera un segundo y luego flush
@@ -349,7 +349,7 @@ class DataProcessor:
     
     
     async def _flush_batches(self):
-        BATCH_MAX = 20000
+        BATCH_MAX = 200000
         batch = self._conn_queue[:BATCH_MAX]
         # Flush de conexiones
         if batch:
