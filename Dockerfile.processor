@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Instalación explícita de pycryptodome para manejo RSA
 RUN pip install --no-cache-dir pycryptodome
-
+# Instala cachetools junto a otras deps
+RUN pip install --no-cache-dir cachetools
 # Copiar código
 COPY processor.py config.py ./
 

@@ -26,7 +26,7 @@ services:
         condition: service_healthy
     networks:
       - backend
-    mem_limit: 100m
+    mem_limit: 60m
     cpus: 1.0
 
 
@@ -46,7 +46,7 @@ services:
      networks:
        - backend
      restart: unless-stopped
-     mem_limit: 60m
+     mem_limit: 50m
      cpus: 0.15
 
 
@@ -90,7 +90,7 @@ services:
       timeout: 5s
     networks:
       - backend
-    mem_limit: 50m
+    mem_limit: 40m
     cpus: 0.3
 
 

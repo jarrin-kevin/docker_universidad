@@ -1,0 +1,278 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 10
+[2KGIL: 0.00%, Active: 100.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%   0.100s    0.100s   _worker (concurrent/futures/thread.py)
+[2K  0.00% 100.00%   0.000s    0.100s   run (threading.py)
+[2K  0.00% 100.00%   0.000s    0.100s   _bootstrap (threading.py)
+[2K  0.00% 100.00%   0.000s    0.100s   _bootstrap_inner (threading.py)
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 100
+[2KGIL: 0.00%, Active: 100.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    1.00s     1.00s   _worker (concurrent/futures/thread.py)
+[2K  0.00% 100.00%   0.000s     1.00s   run (threading.py)
+[2K  0.00% 100.00%   0.000s     1.00s   _bootstrap (threading.py)
+[2K  0.00% 100.00%   0.000s     1.00s   _bootstrap_inner (threading.py)
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 200
+[2KGIL: 0.00%, Active: 100.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    2.00s     2.00s   _worker (concurrent/futures/thread.py)
+[2K  0.00% 100.00%   0.000s     2.00s   run (threading.py)
+[2K  0.00% 100.00%   0.000s     2.00s   _bootstrap (threading.py)
+[2K  0.00% 100.00%   0.000s     2.00s   _bootstrap_inner (threading.py)
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 300
+[2KGIL: 33.00%, Active: 137.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    3.00s     3.00s   _worker (concurrent/futures/thread.py)
+[2K  3.00%   3.00%   0.030s    0.030s   write (asyncio/selector_events.py)
+[2K  2.00%   2.00%   0.020s    0.020s   counter (gender_guesser/detector.py)
+[2K  2.00%   2.00%   0.020s    0.020s   pack_command (redis/asyncio/connection.py)
+[2K  2.00%  28.00%   0.020s    0.280s   _run_once (asyncio/base_events.py)
+[2K  2.00%   2.00%   0.020s    0.020s   await_only (sqlalchemy/util/_concurrency_py
+[2K  1.00%   2.00%   0.010s    0.020s   _read (redis/_parsers/base.py)
+[2K  1.00%   1.00%   0.010s    0.010s   __getitem__ (weakref.py)
+[2K  1.00%   5.00%   0.010s    0.050s   _parse_message (processor.py)
+[2K  1.00%   1.00%   0.010s    0.010s   formatTime (logging/__init__.py)
+[2K  1.00%   1.00%   0.010s    0.010s   _normalizar_campus (processor.py)
+[2K  1.00%  29.00%   0.010s    0.290s   run_forever (asyncio/base_events.py)
+[2K  1.00%   3.00%   0.010s    0.030s   _go (sqlalchemy/orm/state_changes.py)
+[2K  1.00%   1.00%   0.010s    0.010s   _is_internal_frame (logging/__init__.py)
+[2K  1.00%   1.00%   0.010s    0.010s   escape_string (pymysql/converters.py)
+[2K  1.00%   2.00%   0.010s    0.020s   readexactly (asyncio/streams.py)
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 400
+[2KGIL: 69.00%, Active: 179.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    4.00s     4.00s   _worker (concurrent/futures/thread.py)
+[2K  5.00%   9.00%   0.060s    0.130s   notify_movement (processor.py)
+[2K  2.00%  59.00%   0.040s    0.870s   _run_once (asyncio/base_events.py)
+[2K  3.00%   3.00%   0.040s    0.040s   convert_timedelta (pymysql/converters.py)
+[2K  1.00%   1.00%   0.040s    0.040s   write (asyncio/selector_events.py)
+[2K  1.00%   1.00%   0.030s    0.030s   counter (gender_guesser/detector.py)
+[2K  3.00%   5.00%   0.030s    0.050s   _write_sendmsg (asyncio/selector_events.py)
+[2K  1.00%   3.00%   0.030s    0.050s   pack_command (redis/asyncio/connection.py)
+[2K  3.00%   3.00%   0.030s    0.030s   feed_data (asyncio/streams.py)
+[2K  2.00%   2.00%   0.030s    0.030s   _strptime (_strptime.py)
+[2K  2.00%  56.00%   0.030s    0.820s   _run (asyncio/events.py)
+[2K  2.00%   5.00%   0.030s    0.060s   _read_ready__data_received (asyncio/selecto
+[2K  2.00%   2.00%   0.020s    0.020s   _remove_writer (asyncio/selector_events.py)
+[2K  2.00%   3.00%   0.020s    0.060s   _execute_command (aiomysql/connection.py)
+[2K  1.00%   6.00%   0.020s    0.090s   _go (sqlalchemy/orm/state_changes.py)
+[2K  1.00%   1.00%   0.020s    0.030s   readexactly (asyncio/streams.py)
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 500
+[2KGIL: 52.00%, Active: 161.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    5.00s     5.00s   _worker (concurrent/futures/thread.py)
+[2K  2.00%   5.00%   0.080s    0.180s   notify_movement (processor.py)
+[2K  4.00%   4.00%   0.080s    0.080s   write (asyncio/selector_events.py)
+[2K  4.00%   5.00%   0.070s    0.110s   _read_ready__data_received (asyncio/selecto
+[2K  2.00%   2.00%   0.060s    0.060s   convert_timedelta (pymysql/converters.py)
+[2K  2.00%   2.00%   0.050s    0.070s   _write_sendmsg (asyncio/selector_events.py)
+[2K  3.00%   4.00%   0.050s    0.150s   _parse_message (processor.py)
+[2K  1.00%   1.00%   0.040s    0.060s   pack_command (redis/asyncio/connection.py)
+[2K  1.00%   1.00%   0.040s    0.040s   feed_data (asyncio/streams.py)
+[2K  1.00%  49.00%   0.040s     1.31s   _run (asyncio/events.py)
+[2K  4.00%  17.00%   0.040s    0.350s   greenlet_spawn (sqlalchemy/util/_concurrenc
+[2K  0.00%  50.00%   0.040s     1.37s   _run_once (asyncio/base_events.py)
+[2K  0.00%   0.00%   0.030s    0.030s   counter (gender_guesser/detector.py)
+[2K  3.00%   3.00%   0.030s    0.050s   _wait_for_data (asyncio/streams.py)
+[2K  1.00%   2.00%   0.030s    0.050s   readexactly (asyncio/streams.py)
+[2K  2.00%   5.00%   0.030s    0.110s   _read_response (redis/_parsers/resp2.py)
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 600
+[2KGIL: 56.00%, Active: 168.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    6.00s     6.00s   _worker (concurrent/futures/thread.py)
+[2K  6.00%   6.00%   0.110s    0.130s   _write_sendmsg (asyncio/selector_events.py)
+[2K  3.00%   3.00%   0.110s    0.110s   write (asyncio/selector_events.py)
+[2K  3.00%   4.00%   0.100s    0.150s   _read_ready__data_received (asyncio/selecto
+[2K  4.00%   8.00%   0.090s    0.230s   _parse_message (processor.py)
+[2K  1.00%   4.00%   0.090s    0.220s   notify_movement (processor.py)
+[2K  4.00%  52.00%   0.080s     1.89s   _run_once (asyncio/base_events.py)
+[2K  2.00%   2.00%   0.060s    0.080s   pack_command (redis/asyncio/connection.py)
+[2K  0.00%   0.00%   0.060s    0.060s   convert_timedelta (pymysql/converters.py)
+[2K  3.00%   3.00%   0.060s    0.060s   _strptime (_strptime.py)
+[2K  2.00%   2.00%   0.050s    0.070s   readexactly (asyncio/streams.py)
+[2K  1.00%  48.00%   0.050s     1.79s   _run (asyncio/events.py)
+[2K  0.00%   1.00%   0.040s    0.050s   feed_data (asyncio/streams.py)
+[2K  1.00%   1.00%   0.040s    0.060s   _wait_for_data (asyncio/streams.py)
+[2K  0.00%  11.00%   0.040s    0.460s   greenlet_spawn (sqlalchemy/util/_concurrenc
+[2K  0.00%   0.00%   0.030s    0.030s   counter (gender_guesser/detector.py)
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 700
+[2KGIL: 59.00%, Active: 170.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    7.00s     7.00s   _worker (concurrent/futures/thread.py)
+[2K  4.00%   6.00%   0.150s    0.190s   _write_sendmsg (asyncio/selector_events.py)
+[2K  5.00%   8.00%   0.140s    0.300s   notify_movement (processor.py)
+[2K  3.00%   3.00%   0.140s    0.140s   write (asyncio/selector_events.py)
+[2K  2.00%   3.00%   0.120s    0.180s   _read_ready__data_received (asyncio/selecto
+[2K  1.00%   4.00%   0.100s    0.270s   _parse_message (processor.py)
+[2K  0.00%  58.00%   0.080s     2.47s   _run_once (asyncio/base_events.py)
+[2K  1.00%   2.00%   0.070s    0.100s   pack_command (redis/asyncio/connection.py)
+[2K  3.00%   5.00%   0.070s    0.110s   _wait_for_data (asyncio/streams.py)
+[2K  1.00%   1.00%   0.070s    0.070s   convert_timedelta (pymysql/converters.py)
+[2K  1.00%   1.00%   0.070s    0.070s   _strptime (_strptime.py)
+[2K  3.00%   3.00%   0.050s    0.060s   _read (redis/_parsers/base.py)
+[2K  1.00%   1.00%   0.050s    0.060s   feed_data (asyncio/streams.py)
+[2K  0.00%   1.00%   0.050s    0.080s   readexactly (asyncio/streams.py)
+[2K  0.00%  56.00%   0.050s     2.35s   _run (asyncio/events.py)
+[2K  1.00%  12.00%   0.050s    0.580s   greenlet_spawn (sqlalchemy/util/_concurrenc
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 800
+[2KGIL: 65.00%, Active: 177.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    8.00s     8.00s   _worker (concurrent/futures/thread.py)
+[2K  8.00%   9.00%   0.230s    0.280s   _write_sendmsg (asyncio/selector_events.py)
+[2K  3.00%   6.00%   0.170s    0.360s   notify_movement (processor.py)
+[2K  1.00%   1.00%   0.150s    0.150s   write (asyncio/selector_events.py)
+[2K  2.00%   4.00%   0.140s    0.220s   _read_ready__data_received (asyncio/selecto
+[2K  1.00%   8.00%   0.110s    0.350s   _parse_message (processor.py)
+[2K  2.00%  64.00%   0.100s     3.11s   _run_once (asyncio/base_events.py)
+[2K  2.00%   2.00%   0.090s    0.090s   _strptime (_strptime.py)
+[2K  1.00%   1.00%   0.080s    0.120s   _wait_for_data (asyncio/streams.py)
+[2K  3.00%   3.00%   0.080s    0.110s   readexactly (asyncio/streams.py)
+[2K  1.00%   1.00%   0.080s    0.080s   convert_timedelta (pymysql/converters.py)
+[2K  0.00%   2.00%   0.070s    0.120s   pack_command (redis/asyncio/connection.py)
+[2K  1.00%  11.00%   0.060s    0.690s   greenlet_spawn (sqlalchemy/util/_concurrenc
+[2K  0.00%   2.00%   0.050s    0.080s   _read (redis/_parsers/base.py)
+[2K  0.00%   1.00%   0.050s    0.070s   feed_data (asyncio/streams.py)
+[2K  1.00%   1.00%   0.050s    0.050s   time (asyncio/base_events.py)
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 900
+[2KGIL: 48.00%, Active: 153.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%    9.00s     9.00s   _worker (concurrent/futures/thread.py)
+[2K  1.00%   1.00%   0.240s    0.290s   _write_sendmsg (asyncio/selector_events.py)
+[2K  4.00%   5.00%   0.210s    0.410s   notify_movement (processor.py)
+[2K  1.00%   1.00%   0.150s    0.230s   _read_ready__data_received (asyncio/selecto
+[2K  0.00%   0.00%   0.150s    0.150s   write (asyncio/selector_events.py)
+[2K  2.00%   5.00%   0.130s    0.400s   _parse_message (processor.py)
+[2K  2.00%  39.00%   0.120s     3.50s   _run_once (asyncio/base_events.py)
+[2K  3.00%   4.00%   0.110s    0.150s   readexactly (asyncio/streams.py)
+[2K  1.00%   1.00%   0.100s    0.100s   _strptime (_strptime.py)
+[2K  3.00%  12.00%   0.090s    0.810s   greenlet_spawn (sqlalchemy/util/_concurrenc
+[2K  1.00%   1.00%   0.090s    0.130s   _wait_for_data (asyncio/streams.py)
+[2K  1.00%   1.00%   0.090s    0.090s   convert_timedelta (pymysql/converters.py)
+[2K  0.00%   1.00%   0.070s    0.130s   pack_command (redis/asyncio/connection.py)
+[2K  1.00%  37.00%   0.060s     3.32s   _run (asyncio/events.py)
+[2K  1.00%   1.00%   0.060s    0.060s   encode (redis/_parsers/encoders.py)
+[2K  0.00%   0.00%   0.050s    0.080s   _read (redis/_parsers/base.py)
+[2K
+[2KPress Control-C to quit, or ? for help.
+[H[2KCollecting samples from 'python processor.py' (python v3.12.3)
+[2KTotal Samples 1000
+[2KGIL: 2.00%, Active: 102.00%, Threads: 2
+[2K
+[2K  %Own   %Total  OwnTime  TotalTime  Function (filename)                        
+[2K100.00% 100.00%   10.00s    10.00s   _worker (concurrent/futures/thread.py)
+[2K  0.00%   0.00%   0.240s    0.290s   _write_sendmsg (asyncio/selector_events.py)
+[2K  0.00%   0.00%   0.210s    0.410s   notify_movement (processor.py)
+[2K  0.00%   0.00%   0.150s    0.230s   _read_ready__data_received (asyncio/selecto
+[2K  0.00%   0.00%   0.150s    0.150s   write (asyncio/selector_events.py)
+[2K  0.00%   0.00%   0.130s    0.400s   _parse_message (processor.py)
+[2K  0.00%   2.00%   0.120s     3.52s   _run_once (asyncio/base_events.py)
+[2K  0.00%   0.00%   0.110s    0.150s   readexactly (asyncio/streams.py)
+[2K  0.00%   0.00%   0.100s    0.100s   _strptime (_strptime.py)
+[2K  0.00%   2.00%   0.090s    0.830s   greenlet_spawn (sqlalchemy/util/_concurrenc
+[2K  0.00%   0.00%   0.090s    0.130s   _wait_for_data (asyncio/streams.py)
+[2K  0.00%   0.00%   0.090s    0.090s   convert_timedelta (pymysql/converters.py)
+[2K  0.00%   0.00%   0.070s    0.130s   pack_command (redis/asyncio/connection.py)
+[2K  0.00%   2.00%   0.060s     3.34s   _run (asyncio/events.py)
+[2K  0.00%   0.00%   0.060s    0.060s   encode (redis/_parsers/encoders.py)
+[2K  0.00%   0.00%   0.050s    0.080s   _read (redis/_parsers/base.py)
+[2K
+[2KPress Control-C to quit, or ? for help.

@@ -1,11 +1,12 @@
 # processor.py
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 import json
 import socket
 import logging
 import hashlib
-from datetime import datetime,timedelta
+from datetime import datetime
 import asyncio
 import redis.asyncio as aioredis
 
@@ -18,7 +19,9 @@ import gender_guesser.detector as gender
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
 import base64
-import re
+from cachetools import TTLCache, cached
+import orjson as json
+
 """
 Separar la funcionalidad en tres clases:
 
@@ -34,7 +37,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
-
+_GENDER_CACHE = TTLCache(maxsize=1024, ttl=360)
 class PasswordDecryptor:
     #Maneja el descifrado de la contraseña de MySQL usando RSA.
     
@@ -197,25 +200,40 @@ class DataProcessor:
         - Inserta un registro en 'conexiones' y, si es necesario, en 'movimientos'.
         :param message: Cadena de texto con formato JSON.
         :param session: Sesión activa de SQLAlchemy."""
+    _MONTHS = {
+        'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5,
+        'Jun': 6, 'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10,
+        'Nov': 11, 'Dec': 12
+    }
+   
+
     def __init__(self, db_handler, movement_notifier, redis_connector):
         self.db_handler = db_handler #llama a db_hanbler la clase que se encarga de conectarse a sql y ejecutar las sentencias sql
         self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus
         self.redis = redis_connector
         self.redis_client    = redis_connector.redis   # ¡este es el cliente real!
 
-        #detector de genero precompilado
         self.gender_detector = gender.Detector(case_sensitive=False)
         # Colas internas
         self._conn_queue = []   # para upserts en 'conexiones'
         self._mov_queue  = []   # para inserts en 'movimientos'
         # Task de flush periódico
-        asyncio.create_task(self._flush_loop())   
+        asyncio.create_task(self._flush_loop())
+
+    @staticmethod
+    def _parse_ts(s: str) -> datetime:
+        # s == "Apr 21 13:50:39 2025"
+        mon = DataProcessor._MONTHS[s[0:3]]
+        day = int(s[4:6].strip())
+        h, m, sec = map(int, s[7:15].split(':'))
+        year = int(s[16:20])
+        return datetime(year, mon, day, h, m, sec)
     def _normalizar_campus(self, campus_raw):
         """Normaliza los diferentes nombres de campus a las dos categorías principales"""
         # Mapeo de alias a nombres estandarizados
         campus_map = {
             'CC': 'CENTRAL',
-            'Comisariato': 'CENTRAl',
+            'Comisariato': 'CENTRAL',
             'CBAL': 'BALZAY',
             'balzay': 'BALZAY',
             'Balzay': 'BALZAY',
@@ -232,10 +250,10 @@ class DataProcessor:
             data = json.loads(message)
             #logging.info(f"Mensaje recibido: {data}")
             #obtener mensaje dentro de ahi tengo: ap(campus-ap),user(correo hash),timestamp
-            ap = data.get('ap', '') or data.get('_message', '')
-            user = data.get('user', '') or data.get('_user', '')
-            timestamp = data.get('timestamp', '') or data.get('_timestamp', '')
-            ts_dt  = datetime.strptime(timestamp, "%b %d %H:%M:%S %Y")
+            ap = data.get('ap', '') 
+            user = data.get('user', '') 
+            timestamp = data.get('timestamp', '')
+            ts_dt = self._parse_ts(timestamp)
             #Seperar la fecha y la hora
             date   = ts_dt.strftime("%Y-%m-%d")
             time   = ts_dt.strftime("%H:%M:%S")
@@ -249,7 +267,7 @@ class DataProcessor:
     
             # Con el correo, se procede a inferir en el genero y hashear el correo
             gender_inferred = self._infer_gender(user)
-            correo_hash = hashlib.sha256(user.encode("utf-8")).hexdigest()
+            correo_hash = hashlib.blake2s(user.encode("utf-8")).hexdigest()
             return {
                 'correo_hash': correo_hash,
                 'gender': gender_inferred,
@@ -301,7 +319,7 @@ class DataProcessor:
         )
     async def process_message(self, message):
         try:
-            datos = self._parse_message(message)
+            datos = await asyncio.to_thread(self._parse_message, message)
             if not datos:
                 return
             # Consultar el último campus registrado para este usuario
@@ -420,7 +438,8 @@ class DataProcessor:
         except Exception as e:
             logging.error(f"Error en _flush_batches: {e}")
             
-    def _infer_gender(self, user):
+    @cached(_GENDER_CACHE)
+    def _infer_gender(self, user: str) -> str:
         """Infiere el género basado en el nombre del usuario."""
         try:
             local = user.split('@', 1)[0].lower()
@@ -449,6 +468,7 @@ class DataProcessor:
                     return "desconocido"
         except Exception:
             return "desconocido"
+        
     async def _get_last_campus_cached(self, correo_hash):
         key = f"last_campus:{correo_hash}"
         last = await self.redis_client.get(key)
@@ -512,6 +532,9 @@ class MovementNotifier:
             logging.error(f"Error al enviar notificación de movimiento: {e}")
 
 async def main():
+    executor = ThreadPoolExecutor(max_workers=4)
+    loop = asyncio.get_event_loop()
+    loop.set_default_executor(executor)
     try:
         redis_connector = RedisConnector()
         await redis_connector.connect()
@@ -521,7 +544,7 @@ async def main():
         data_processor = DataProcessor(db_handler,movement_notifier,redis_connector)
         
         logging.info("Iniciando procesador de mensajes...")
-        
+
         while True:
             message = await redis_connector.get_message("socket_messages", timeout=0)
             if message:
