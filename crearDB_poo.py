@@ -12,33 +12,13 @@ import traceback
 # Al principio del script
 print("Iniciando script de creación de base de datos...", file=sys.stderr)
 sys.stderr.flush()  # Forzar la salida inmediata
-class DatabaseConfig:
-    try:
-        
-        print(f"Intentando leer clave privada desde: {'/run/secrets/private_key'}")
-        with open("/run/secrets/private_key", "rb") as key_file:
-            private_key = RSA.import_key(key_file.read())
-            print("Clave privada leída correctamente")
-
-        print(f"Intentando leer contraseña cifrada desde: {'/run/secrets/encrypted_password'}")  
-        with open("/run/secrets/encrypted_password", "rb") as pass_file:
-            encrypted_data = base64.b64decode(pass_file.read())
-        print("Contraseña cifrada leída correctamente")
-
-        cipher = PKCS1_OAEP.new(private_key)
-        ROOT_PASSWORD = cipher.decrypt(encrypted_data).decode('utf-8')
-        print("Contraseña descifrada correctamente")
-        #print(f"Contraseña descifrada: {ROOT_PASSWORD}")  # Log temporal
-    except Exception as e:
-        print(f"Error descifrando contraseña: {e}")
-        import traceback
-        traceback.print_exc()
-        ROOT_PASSWORD = None
-        
+class DatabaseConfig:        
     HOST = os.getenv("MYSQL_HOST", "mysql")
     ROOT_USER = os.getenv("MYSQL_ROOT_USER", "root")
     DATABASE_NAME = os.getenv("MYSQL_DATABASE", "universidad")
-    
+    ROOT_PASSWORD = os.getenv("MYSQL_ROOT_PASSWORD")
+    if not ROOT_PASSWORD:
+        raise ValueError("Debes definir MYSQL_ROOT_PASSWORD en el entorno.")
 
 class DatabaseSetup:
     """Clase para gestionar la conexión, creación de base de datos y tablas."""
@@ -96,10 +76,10 @@ class DatabaseSetup:
             #    (NOTA: esto hace un f-string para inyectar el nombre de la BD directamente)
             self.cursor.execute(f"""
                 SELECT COUNT(1)
-                FROM INFORMATION_SCHEMA.STATISTICS
+                    FROM INFORMATION_SCHEMA.STATISTICS
                 WHERE table_schema = '{DatabaseConfig.DATABASE_NAME}'
-                AND table_name   = 'conexiones'
-                AND index_name   = 'ux_conexiones_correo_fecha'
+                    AND table_name   = 'conexiones'
+                    AND index_name   = 'ux_conexiones_correo_fecha'
             """)
             exists = self.cursor.fetchone()[0]
 
@@ -108,7 +88,7 @@ class DatabaseSetup:
                 self.execute_query(
                     """
                     ALTER TABLE conexiones
-                    ADD UNIQUE INDEX ux_conexiones_correo_fecha (correo, fecha);
+                        ADD UNIQUE INDEX ux_conexiones_correo_fecha (correo, fecha);
                     """,
                     "Índice único ux_conexiones_correo_fecha creado."
                 )

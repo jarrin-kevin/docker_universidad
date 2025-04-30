@@ -5,7 +5,8 @@ RUN groupadd -r appuser && useradd -r -g appuser -s /bin/false appuser
 
 # Actualizar e instalar dependencias
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libmariadb-dev && \
+    apt-get install -y --no-install-recommends \
+      gcc libmariadb-dev libssl-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -15,8 +16,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instalación explícita de pycryptodome para manejo RSA
-RUN pip install --no-cache-dir pycryptodome
 # Instala cachetools junto a otras deps
 RUN pip install --no-cache-dir cachetools
 # Copiar código
@@ -28,18 +27,10 @@ RUN chmod 644 config.py && chown appuser:appuser config.py && \
     chown -R appuser:appuser /tmp/cache && \
     chmod 700 /tmp/cache
 
-# Configurar permisos adecuados
-RUN mkdir -p /run/secrets && \
-    chmod 755 /run/secrets
 
 # Cambiar al usuario no privilegiado
 USER appuser
 
-# Healthcheck
-#HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
-#  CMD bash -c "echo -n ping >/dev/udp/localhost/12349 && \
-#               IFS= read -t 1 -u 0 response < /dev/udp/localhost/12349 && \
-#               [ \"$response\" = pong ]"
 
 # Ejecutar script
 CMD ["sh", "-c", "python processor.py || sleep 3600"]

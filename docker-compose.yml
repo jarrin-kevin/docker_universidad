@@ -12,10 +12,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.receiver
-    environment:
-      - RECEIVER_HOST=0.0.0.0
-      - RECEIVER_PORT=12345
-      - REDIS_URL=redis://:x5xBAO6bdasNXKa@redis:6379
+    env_file:
+      - ./.env
     container_name: receiver
     hostname: receiver
     ports:
@@ -29,25 +27,24 @@ services:
     mem_limit: 60m
     cpus: 1.0
 
-
-  rsyslog-proxy: #Servicio rsyslog-proxy
-     build:
-       context: ./rsyslogproxy
-       dockerfile: Dockerfile
-     container_name: rsyslog-proxy
-     depends_on:
+  rsyslog-proxy:  # Servicio rsyslog-proxy
+    build:
+      context: ./rsyslogproxy
+      dockerfile: Dockerfile
+    container_name: rsyslog-proxy
+    depends_on:
       receiver:
         condition: service_started
-     ports:
-       - "514:514"
-       - "514:514/udp"
-     volumes:
-       - ./rsyslogproxy/rsyslog.conf:/etc/rsyslog.conf:ro
-     networks:
-       - backend
-     restart: unless-stopped
-     mem_limit: 50m
-     cpus: 0.15
+    ports:
+      - "514:514"
+      - "514:514/udp"
+    volumes:
+      - ./rsyslogproxy/rsyslog.conf:/etc/rsyslog.conf:ro
+    networks:
+      - backend
+    restart: unless-stopped
+    mem_limit: 50m
+    cpus: 0.15
 
 
   mysql:
@@ -55,18 +52,20 @@ services:
     restart: always
     command:
     - "--default-authentication-plugin=mysql_native_password"
-    #secrets:
-    #- plain_password
+    env_file:
+      - ./.env
+    environment:
+      - MYSQL_ROOT_PASSWORD
+      - MYSQL_DATABASE
+      - MYSQL_USER=${MYSQL_APP_USER}
+      - MYSQL_PASSWORD=${MYSQL_APP_PASSWORD}
     volumes:
     - ./mysql-init:/docker-entrypoint-initdb.d  # Asegurar volumen de inicialización
     - mysql-data:/var/lib/mysql  # Esta línea falta - conecta el volumen al contenedor
-    - ./secrets/plain_password.txt:/run/secrets/plain_password:ro
-    environment:
-    - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/plain_password
     ports:
       - "3306:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "--password=$$(cat /run/secrets/plain_password)"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "--password=${MYSQL_ROOT_PASSWORD}"]
       interval: 30s
       retries: 5
       start_period: 30s
@@ -79,11 +78,13 @@ services:
   redis:
     image: redis:6.2
     restart: always
-    command: ["redis-server", "--requirepass", "x5xBAO6bdasNXKa", "--appendonly", "yes"]
+    env_file:
+      - ./.env
+    command: ["redis-server","--requirepass", "${REDIS_PASSWORD}","--appendonly", "yes"]
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "x5xBAO6bdasNXKa", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 30s
       retries: 5
       start_period: 30s
@@ -98,15 +99,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dbinit
-    volumes:
-      - ./secrets/encrypted_password.txt:/run/secrets/encrypted_password:ro
-      - ./secrets/private_key.pem:/run/secrets/private_key:ro
+    env_file:
+      - ./.env
     environment:
       - MYSQL_HOST=mysql
       - MYSQL_ROOT_USER=root
-      - MYSQL_DATABASE=universidad
-      - PRIVATE_KEY_PATH=/run/secrets/private_key
-      - ENCRYPTED_PASSWORD_PATH=/run/secrets/encrypted_password 
     depends_on:
       mysql:
         condition: service_healthy
@@ -123,14 +120,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.processor
-    volumes:
-      - ./secrets/encrypted_password.txt:/run/secrets/encrypted_password:ro
-      - ./secrets/private_key.pem:/run/secrets/private_key:ro
-    environment:
-      - DATABASE_URL=mysql+mysqlconnector://root:PASSWORD_PLACEHOLDER@mysql/universidad
-      - REDIS_URL=redis://:x5xBAO6bdasNXKa@redis:6379
-      - PRIVATE_KEY_PATH=/run/secrets/private_key
-      - ENCRYPTED_PASSWORD_PATH=/run/secrets/encrypted_password
+    env_file:
+      - ./.env
     ports:
       - "12347:12347/udp"
       - "12349:12349/udp"

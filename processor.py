@@ -16,9 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 from config import URL_DATABASE, CONFIG_RECEIVER, DATABASE_CONFIG,MOVEMENT_NOTIFICATION # REDIS_URL debe estar definido, por ejemplo: "redis://localhost:6379"
 import gender_guesser.detector as gender
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
-import base64
+
 from cachetools import TTLCache, cached
 import orjson as json
 
@@ -38,30 +36,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 _GENDER_CACHE = TTLCache(maxsize=1024, ttl=360)
-class PasswordDecryptor:
-    #Maneja el descifrado de la contraseña de MySQL usando RSA.
-    
-    @staticmethod
-    def decrypt_password():
-        try:
-            # Obtener rutas de los archivos secretos
-            priv_path = DATABASE_CONFIG.get('PRIVATE_KEY_PATH', '/run/secrets/private_key')
-            enc_path  = DATABASE_CONFIG.get('ENCRYPTED_PASSWORD_PATH', '/run/secrets/encrypted_password')
-            
-            # Leer la clave privada
-            with open(priv_path, 'rb') as kf:
-                key = RSA.import_key(kf.read())
-            
-            # Leer la contraseña cifrada en modo binario
-            with open(enc_path, 'rb') as pf:
-                encrypted = pf.read()
-                # Decodificar Base64 sin manipular el contenido
-            decrypted = PKCS1_OAEP.new(key).decrypt(base64.b64decode(encrypted))
-            return decrypted.decode('utf-8')
-        except Exception as e:
-            logging.error(f"Error descifrando contraseña: {e}")
-            raise   
-DB_PASSWORD = PasswordDecryptor.decrypt_password()                
+
 class RedisConnector:
     def __init__(self):
         """Conecta a Redis y extrae mensajes de la cola."""
@@ -92,12 +67,16 @@ class DBHandler:
     """Maneja la conexión asíncrona y las operaciones SQL."""
     def __init__(self):
         try:
+            password = DATABASE_CONFIG['PASSWORD']
+            if not password:
+                raise ValueError("La variable MYSQL_APP_PASSWORD no está definida en el entorno.")
             # Reemplaza placeholder con la contraseña real
-            db_url = URL_DATABASE['DATABASE_URL'].replace('PASSWORD_PLACEHOLDER', DB_PASSWORD)
+            db_url = URL_DATABASE['DATABASE_URL']
             # Engine asíncrono (p.ej. mysql+aiomysql://...)
             self.engine = create_async_engine(
                 db_url,
                 echo=False,
+                 connect_args={"auth_plugin": "mysql_native_password"},
                 pool_size=10000,
                 max_overflow=20000,
                 pool_timeout=1,
@@ -518,10 +497,11 @@ class MovementNotifier:
                 "source": "processor"
             }
             
-            # Convertir a JSON y añadir un salto de línea para delimitar mensajes
-            message = json.dumps(movement_data) + "\n"           
+            # orjson.dumps() ya devuelve bytes, así que añadimos un newline en bytes:
+            payload = json.dumps(movement_data)  # bytes
+            payload += b'\n'          
             # Enviar datos - para UDP no necesitamos conectar primero
-            self.sock.sendto(message.encode('utf-8'), (self.target_host, self.target_port))
+            self.sock.sendto(payload, (self.target_host, self.target_port))
             #logging.info(f"Mensaje UDP enviado: {message}")
             #self.sock.close()
             

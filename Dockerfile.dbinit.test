@@ -1,3 +1,3 @@
-FROM python:3.12.3
+FROM python:3.12.3-slim
 WORKDIR /app
 CMD ["sh", "-c", "ls -la /run/secrets && echo 'Contenido de secrets' && cat /run/secrets/* || echo 'No se pueden leer los secretos'"]
