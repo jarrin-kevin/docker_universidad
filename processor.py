@@ -1,8 +1,6 @@
 # processor.py
-
-import os
 from concurrent.futures import ThreadPoolExecutor
-import json
+import signal
 import socket
 import logging
 import hashlib
@@ -58,10 +56,16 @@ class RedisConnector:
         except Exception as e:
             logging.error(f"Error obteniendo mensaje de Redis: {e}")
         return None
+    async def cache_last_campus(self, correo, campus, ex=300):
+        #Guarda el último campus del usuario en Redis con un tiempo de expiración.
+        await self.redis.set(f"last_campus:{correo}", campus, ex=ex)
+    async def get_last_campus(self, correo):
+        #Devuelve el último campus del usuario desde Redis.
+        val = await self.redis.get(f"last_campus:{correo}")
+        return val.decode() if val else None
     async def close(self):
         await self.redis.aclose()
-    async def get_key(self, key):    return await self.redis.get(key)
-    async def set_key(self, key, v, ex): return await self.redis.set(key, v, ex=ex)
+
 
 class DBHandler:
     """Maneja la conexión asíncrona y las operaciones SQL."""
@@ -87,56 +91,40 @@ class DBHandler:
                 class_=AsyncSession,
                 expire_on_commit=False
             )
-        except Exception as e:
-            logging.error(f"Error conectando a la base de datos: {e}")
-            raise
-
-    async def save_to_conexiones(self, correo, sexo, ap, campus, fecha, hora):
-        """Inserta o actualiza en 'conexiones' usando upsert de MySQL."""
-        async with self.Session() as sess:
-            stmt = text(
-                """
+            self.STMT_CONEX = text("""
                 INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
                 VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
                 ON DUPLICATE KEY UPDATE
-                  ap     = VALUES(ap),
-                  campus = VALUES(campus),
-                  hora   = VALUES(hora);
-                """
+                    ap     = VALUES(ap),
+                    campus = VALUES(campus),
+                    hora   = VALUES(hora)
+            """)
+            self.STMT_MOV = text("""
+            INSERT INTO movimientos (
+                correo, sexo, campus_anterior, campus_actual,
+                fecha, hora_llegada, hora_salida
             )
-            params = {
-                "correo": correo,
-                "sexo": sexo,
-                "ap": ap,
-                "campus": campus,
-                "fecha": fecha,
-                "hora": hora
-            }
-            await sess.execute(stmt, params)
-            await sess.commit()
-            #logging.info("Registro en conexiones")
-
-    async def save_to_movimientos(self, correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida):
-        """Inserta un registro en 'movimientos'."""
-        async with self.Session() as sess:
-            stmt = text(
-                """
-                INSERT INTO movimientos (correo, sexo, campus_anterior, campus_actual, fecha, hora_llegada, hora_salida)
-                VALUES (:correo, :sexo, :campus_anterior, :campus_actual, :fecha, :hora_llegada, :hora_salida);
-                """
-            )
-            params = {
-                "correo": correo,
-                "sexo": sexo,
-                "campus_anterior": campus_anterior,
-                "campus_actual": campus_actual,
-                "fecha": fecha,
-                "hora_llegada": hora_llegada,
-                "hora_salida": hora_salida
-            }
-            await sess.execute(stmt, params)
-            await sess.commit()
-            #logging.info("Registro insertado en movimientos: moved %s → %s", campus_anterior, campus_actual)
+            VALUES (:correo, :sexo, :campus_anterior, :campus_actual,
+                :fecha, :hora_llegada, :hora_salida)
+        """)
+        except Exception as e:
+            logging.error(f"Error conectando a la base de datos: {e}")
+            raise
+    async def bulk_upsert_conexiones(self, batch):
+        async with self.engine.begin() as conn:
+            await conn.execute(self.STMT_CONEX, [
+                {"correo": c, "sexo": s, "ap": a, "campus": cp,
+                 "fecha": f, "hora": h}
+                for c, s, a, cp, f, h in batch
+            ])
+    async def bulk_insert_movimientos(self, batch):
+        async with self.engine.begin() as conn:
+            await conn.execute(self.STMT_MOV, [
+                {"correo": c, "sexo": s, "campus_anterior": ca,
+                 "campus_actual": cn, "fecha": f,
+                 "hora_llegada": hl, "hora_salida": hs}
+                for c, s, ca, cn, f, hl, hs in batch
+            ])
 
     async def get_last_campus(self, correo):
         """Devuelve el último campus registrado para el usuario (o None)."""
@@ -169,7 +157,8 @@ class DBHandler:
             )
             row = result.fetchone()
             return row[0] if row else None
-    
+    async def close(self): 
+        await self.engine.dispose()
 class DataProcessor:
     """Procesa cada mensaje y aplica la lógica de negocio usando DBHandler:
         Procesa el mensaje recibido:
@@ -190,15 +179,15 @@ class DataProcessor:
         self.db_handler = db_handler #llama a db_hanbler la clase que se encarga de conectarse a sql y ejecutar las sentencias sql
         self.movement_notifier = movement_notifier #es la clase encargada de enviar los datos por el puerto tcp cuando registra un cambio de campus
         self.redis = redis_connector
-        self.redis_client    = redis_connector.redis   # ¡este es el cliente real!
 
         self.gender_detector = gender.Detector(case_sensitive=False)
         # Colas internas
         self._conn_queue = []   # para upserts en 'conexiones'
         self._mov_queue  = []   # para inserts en 'movimientos'
         # Task de flush periódico
-        asyncio.create_task(self._flush_loop())
-
+        self._stop = asyncio.Event()
+        self._flush_task =asyncio.create_task(self._flush_loop())
+        
     @staticmethod
     def _parse_ts(s: str) -> datetime:
         # s == "Apr 21 13:50:39 2025"
@@ -226,17 +215,16 @@ class DataProcessor:
     def _parse_message(self,message):
         """Metodo encargado de recibir los datos y extraer la informacion necesario del mismo"""
         try:
-            data = json.loads(message)
-            #logging.info(f"Mensaje recibido: {data}")
             #obtener mensaje dentro de ahi tengo: ap(campus-ap),user(correo hash),timestamp
+            data = json.loads(message)
             ap = data.get('ap', '') 
             user = data.get('user', '') 
             timestamp = data.get('timestamp', '')
-            ts_dt = self._parse_ts(timestamp)
             #Seperar la fecha y la hora
+            ts_dt = self._parse_ts(timestamp)
             date   = ts_dt.strftime("%Y-%m-%d")
             time   = ts_dt.strftime("%H:%M:%S")
-            # Extraer el nombre del usuario (correo)
+            # Separar el campus y el AP
             try:
                 campus_raw, ap = ap.split('-', 1)
                 campus = self._normalizar_campus(campus_raw)
@@ -246,7 +234,9 @@ class DataProcessor:
     
             # Con el correo, se procede a inferir en el genero y hashear el correo
             gender_inferred = self._infer_gender(user)
+            #hash del correo
             correo_hash = hashlib.blake2s(user.encode("utf-8")).hexdigest()
+            #se retorna un diccionario con los datos necesarios para guardar en la base de datos
             return {
                 'correo_hash': correo_hash,
                 'gender': gender_inferred,
@@ -258,44 +248,6 @@ class DataProcessor:
         except json.JSONDecodeError as e:
             logging.error(f"Error al decodificar JSON: {e}")
             return None
-            
-    async def detect_movement(self, datos, last_campus):
-        """Metodo encargado de preguntar si el usuario cambio de campus"""
-        return last_campus and last_campus != datos['campus']
-        
-    async def handle_movement(self, datos, last_campus):
-        """Método encargado de obtener la última conexión del usuario que cambió de campus y guardar el registro en la base"""
-        hora_anterior = await self.db_handler.get_last_connection_time(datos['correo_hash'])
-        if hora_anterior:
-            await self.db_handler.save_to_movimientos(
-                datos['correo_hash'], 
-                datos['gender'], 
-                last_campus, 
-                datos['campus'], 
-                datos['fecha'], 
-                datos['hora'],
-                hora_anterior
-            )
-            if self.movement_notifier.enabled:
-                self.movement_notifier.notify_movement(
-                    fecha=datos['fecha'],
-                    hora_actual=datos['hora'],
-                    hora_anterior=hora_anterior,
-                    campus_actual=datos['campus'],
-                    campus_anterior=last_campus
-                )
-            #logging.info(f"El usuario {datos['correo_hash']} se movilizó de {last_campus} a {datos['campus']}.")
-    async def _process_connection(self, datos):
-        # Aquí actualizaríamos la conexión del usuario si existe,
-        # o crearíamos una nueva si no existe
-        await self.db_handler.save_to_conexiones(
-            datos['correo_hash'], 
-            datos['gender'],
-            datos['ap'],
-            datos['campus'],
-            datos['fecha'],
-            datos['hora']
-        )
     async def process_message(self, message):
         try:
             datos = await asyncio.to_thread(self._parse_message, message)
@@ -324,26 +276,31 @@ class DataProcessor:
                         campus_anterior=last
                     )
                 # actualizamos cache
-                await self.redis_client.set(f"last_campus:{correo}", datos['campus'], ex=300)
+                await self.redis.cache_last_campus(correo, datos['campus'], ex=300)
             # Encolamos el upsert de conexión
             self._conn_queue.append((
                 correo, datos['gender'], datos['ap'],
                 datos['campus'], datos['fecha'], datos['hora']
             ))
-            #await self._process_connection(datos)
+            if not last: 
+                await self.redis.cache_last_campus(correo, datos['campus'], ex=300)
         except Exception as e:
             logging.error(f"Error procesando mensaje: {e}")
     
     async def _flush_loop(self):
-        while True:
+        try:
+            while not self._stop.is_set():
             # Si la cola crece demasiado, flush inmediato          # intervalo de flush
-            if len(self._conn_queue) >= 100000 or len(self._mov_queue) >= 100000:
-                await self._flush_batches()
-                continue
+                if len(self._conn_queue) >= 100000 or len(self._mov_queue) >= 100000:
+                    await self._flush_batches()
+                    continue
             # Si no, espera un segundo y luego flush
-            await asyncio.sleep(1)
+                await asyncio.sleep(1)
+                await self._flush_batches()
+        except asyncio.CancelledError:
+            # última pasada antes de morir
             await self._flush_batches()
-    
+            raise
     
     async def _flush_batches(self):
         try:
@@ -352,71 +309,27 @@ class DataProcessor:
             batch = self._conn_queue[:BATCH_MAX]
             # Flush de conexiones
             if batch:
-                # abrimos una transacción en el engine
-                #logging.info(f"Flushing {len(batch)} conexiones a BD")
-                async with self.db_handler.engine.begin() as conn:
-                    stmt_conn = text("""
-                      INSERT INTO conexiones (correo, sexo, ap, campus, fecha, hora)
-                      VALUES (:correo, :sexo, :ap, :campus, :fecha, :hora)
-                      ON DUPLICATE KEY UPDATE
-                        ap     = VALUES(ap),
-                        campus = VALUES(campus),
-                        hora   = VALUES(hora)
-                    """)
-                    result=await conn.execute(
-                        stmt_conn,
-                        [
-                            {
-                                "correo": vals[0],
-                                "sexo": vals[1],
-                                "ap": vals[2],
-                                "campus": vals[3],
-                                "fecha": vals[4],
-                                "hora": vals[5]
-                            }
-                            for vals in batch
-                        ]
-                    )
-                    #logging.info(f"→ Conexiones: filas afectadas = {result.rowcount}")
+                await self.db_handler.bulk_upsert_conexiones(batch)
                 del self._conn_queue[:len(batch)]
-                #logging.info("→ Conexiones flush exitoso")
-
             # Flush de movimientos
             mov_batch = self._mov_queue[:BATCH_MAX]
             if mov_batch:
-                #logging.info(f"Flushing {len(mov_batch)} movimientos a BD")
-                async with self.db_handler.engine.begin() as conn:
-                    stmt_mov = text("""
-                    INSERT INTO movimientos (
-                        correo, sexo, campus_anterior, campus_actual,
-                        fecha, hora_llegada, hora_salida
-                    ) VALUES (
-                        :correo, :sexo, :campus_anterior, :campus_actual,
-                        :fecha, :hora_llegada, :hora_salida
-                    )
-                    """)
-                    result=await conn.execute(
-                        stmt_mov,
-                        [
-                            {
-                                "correo": vals[0],
-                                "sexo": vals[1],
-                                "campus_anterior": vals[2],
-                                "campus_actual": vals[3],
-                                "fecha": vals[4],
-                                "hora_llegada": vals[5],
-                                "hora_salida": vals[6]
-                            }
-                            for vals in mov_batch
-                        ]
-                    )
-                    #logging.info(f"→ Movimientos: filas afectadas = {result.rowcount}")
+                await self.db_handler.bulk_insert_movimientos(mov_batch)
                 del self._mov_queue[:len(mov_batch)]
-                #logging.info("→ Movimientos flush exitoso")
-            #logging.info("<< Saliendo de _flush_batches()")
         except Exception as e:
             logging.error(f"Error en _flush_batches: {e}")
-            
+
+    async def shutdown(self):
+        #Llamar antes de salir para cerrar todo ordenadamente.
+        self._stop.set()           # Indicamos que termine el while
+        self._flush_task.cancel()  # Cancelamos la tarea de flush
+        try:
+            await self._flush_task
+        except asyncio.CancelledError:
+            pass
+        await self._flush_batches()        # flush final
+        await self.redis.close()           # método que ya tienes
+        await self.db_handler.close()      # método que ya tienes
     @cached(_GENDER_CACHE)
     def _infer_gender(self, user: str) -> str:
         """Infiere el género basado en el nombre del usuario."""
@@ -447,16 +360,18 @@ class DataProcessor:
                     return "desconocido"
         except Exception:
             return "desconocido"
-        
+    #Traemos el último campus del usuario desde Redis o BD    
     async def _get_last_campus_cached(self, correo_hash):
-        key = f"last_campus:{correo_hash}"
-        last = await self.redis_client.get(key)
+        #Traemos el valor del usuario con campus de cache en redis
+        last = await self.redis.get_last_campus(correo_hash)
         if last:
-            return last.decode()    # viene en bytes
-        # Si no está en cache, lo traemos de BD y lo guardamos
+            return last # Si está en cache, lo devolvemos y salimos de la función
+        # Si no está en cache, lo traemos  el campus del usuario de BD
         last = await self.db_handler.get_last_campus(correo_hash)
         if last:
-            await self.redis_client.set(key, last, ex=300)
+            # Guardamos el último campus del usuario en cache para futuras consultas
+            # y le damos un tiempo de expiración de 5 minutos (300 segundos)
+            await self.redis.cache_last_campus(correo_hash, last, ex=300)
         return last
 class MovementNotifier:
     """Clase que maneja el envío de notificaciones TCP cuando un usuario se mueve entre campus."""
@@ -523,19 +438,26 @@ async def main():
         movement_notifier = MovementNotifier()  # Crear instancia
         data_processor = DataProcessor(db_handler,movement_notifier,redis_connector)
         
-        logging.info("Iniciando procesador de mensajes...")
+        stop_event = asyncio.Event()
 
-        while True:
-            message = await redis_connector.get_message("socket_messages", timeout=0)
+        logging.info("Iniciando procesador de mensajes...")
+        def _graceful(_sig, _frm):
+            stop_event.set()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, _graceful)
+        while not stop_event.is_set():
+            message = await redis_connector.get_message("socket_messages", timeout=1)
             if message:
                 await data_processor.process_message(message)
+        await data_processor.shutdown()
                 
     except KeyboardInterrupt:
         logging.info("Proceso interrumpido por el usuario.")
     except Exception as e:
         logging.error(f"Error en el procesamiento principal: {e}")
     finally:
-        await redis_connector.close()
+        executor.shutdown(wait=False)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
