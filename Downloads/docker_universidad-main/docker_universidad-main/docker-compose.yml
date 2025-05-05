@@ -1,0 +1,178 @@
+version: "2.4"
+#secrets:
+#  private_key:
+#    file: ./secrets/private_key.pem
+#  encrypted_password:
+#    file: ./secrets/encrypted_password.txt
+#  plain_password:
+#    file: ./secrets/plain_password.txt
+
+services:
+  receiver:
+    build:
+      context: .
+      dockerfile: Dockerfile.receiver
+    env_file:
+      - ./.env
+    container_name: receiver
+    hostname: receiver
+    ports:
+      - "12345:12345/udp"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    mem_limit: 60m
+    cpus: 1.0
+
+  rsyslog-proxy:  # Servicio rsyslog-proxy
+    build:
+      context: ./rsyslogproxy
+      dockerfile: Dockerfile
+    container_name: rsyslog-proxy
+    depends_on:
+      receiver:
+        condition: service_started
+    ports:
+      - "514:514"
+      - "514:514/udp"
+    volumes:
+      - ./rsyslogproxy/rsyslog.conf:/etc/rsyslog.conf:ro
+    networks:
+      - backend
+    restart: unless-stopped
+    mem_limit: 50m
+    cpus: 0.15
+
+
+  mysql:
+    image: mysql:8.0
+    restart: always
+    command:
+    - "--default-authentication-plugin=mysql_native_password"
+    env_file:
+      - ./.env
+    environment:
+      - MYSQL_ROOT_PASSWORD
+      - MYSQL_DATABASE
+      - MYSQL_USER=${MYSQL_APP_USER}
+      - MYSQL_PASSWORD=${MYSQL_APP_PASSWORD}
+    volumes:
+    - ./mysql-init:/docker-entrypoint-initdb.d  # Asegurar volumen de inicialización
+    - mysql-data:/var/lib/mysql  # Esta línea falta - conecta el volumen al contenedor
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "--password=${MYSQL_ROOT_PASSWORD}"]
+      interval: 30s
+      retries: 5
+      start_period: 30s
+      timeout: 5s
+    networks:
+      - backend
+    mem_limit: 700m
+    cpus: 0.2
+    
+  redis:
+    image: redis:6.2
+    restart: always
+    env_file:
+      - ./.env
+    command: ["redis-server","--requirepass", "${REDIS_PASSWORD}","--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      retries: 5
+      start_period: 30s
+      timeout: 5s
+    networks:
+      - backend
+    mem_limit: 40m
+    cpus: 0.3
+
+
+  dbinit:
+    build:
+      context: .
+      dockerfile: Dockerfile.dbinit
+    env_file:
+      - ./.env
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_ROOT_USER=root
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: on-failure:3  # Intentará reiniciarse hasta 3 veces si falla
+    #restart: "no"
+    networks:
+      - backend
+
+
+
+
+  processor:
+    user: root  # Añade esta línea para depurar
+    build:
+      context: .
+      dockerfile: Dockerfile.processor
+    stop_grace_period: 10s
+    env_file:
+      - ./.env
+    ports:
+      - "12347:12347/udp"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 2g
+    cpus: 2
+
+  nodejs:
+    build:
+      context: .
+      dockerfile: Dockerfile.nodejs
+    container_name: nodejs
+    env_file:
+      - ./.env
+    working_dir: /app               # “cd /app” antes de npm start
+    volumes:
+      - ./:/app                      # monta TODO el proyecto en /app
+      - node_modules:/app/node_modules           # preserva los node_modules instalados en la imagen
+    ports:
+      - "12349:12349/udp"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=development         # activa modo dev en tu app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - backend
+    mem_limit: 2g
+    cpus: 2
+
+
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+volumes:
+  mysql-data:
+  node_modules:
+
