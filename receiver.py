@@ -1,11 +1,8 @@
 from abc import ABC, abstractmethod
 import redis.asyncio as aioredis
-import json
+import orjson as json
 import asyncio
 import logging
-import gzip
-import subprocess
-from datetime import datetime,timedelta
 import re
 from config import CONFIG_RECEIVER
 
@@ -46,7 +43,7 @@ class receiver_udp(DataReceiver):
         try:
             self.redis_client = aioredis.from_url(self.redis_url)
             await self.redis_client.ping()
-            #logging.info("Conexión con Redis exitosa.")
+            logging.info("Conexión con Redis exitosa.")
         except Exception as e:
             logging.error(f"Error conectando a Redis: {e}")
             # Se lanza la excepción personalizada para que el orquestador la capture
@@ -147,7 +144,11 @@ class receiver_udp(DataReceiver):
             #asyncio.create_task(
             #    asyncio.to_thread(self.redis_client.rpush, "socket_messages", json_str)
             #)
-            await self.redis_client.rpush("socket_messages", json_str)
+            try:
+                await self.redis_client.rpush("socket_messages", json_str)
+                #logging.info("PUSH a Redis: %s")
+            except Exception as e:
+                logging.error("❌  Error enviando a Redis")
             logging.info("Mensaje syslog procesado y enviado a Redis")
             return True
         except Exception as e:

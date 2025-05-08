@@ -1,15 +1,22 @@
 import Redis from 'ioredis';
 import dotenv from 'dotenv';
-import detectGender from 'gender-detection-from-name';
+import { getGender as detectGender } from 'gender-detection-from-name';
 import mysql  from 'mysql2/promise';
 import crypto from 'node:crypto';
 import dgram from 'dgram';
-
+import pino from 'pino';
 dotenv.config();                     // Carga las variables definidas en .env
 
 /* --------------- sección global --------------- */
-let redis,db,processor;                     //   ⟵ 1️⃣  la declaras arriba
-
+let redis,db,processor,notifier;                     //   ⟵ 1️⃣  la declaras arriba
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport: process.env.NODE_ENV === 'development' && {
+    target: 'pino-pretty', options: { translateTime: 'SYS:standard' }
+  }
+});
+/* ───── estadísticas ───── */
+let totalRx = 0, jsonFail = 0, parseFail = 0;
 class RedisConnector {
     constructor () {
         /* 1. Construye la URL  igual que en Python
@@ -25,6 +32,7 @@ class RedisConnector {
     pero así conservamos la semántica “connect()” de Python). */
     async connect () {
         await this.client.connect();     // resuelve cuando el handshake está OK
+        logger.info({ url: this.url }, 'Redis conectado');
     }
     /** BLPOP bloqueante — equivalente a get_message() en Python.
     *  queue   : nombre de la lista (por defecto "socket_messages")
@@ -38,9 +46,15 @@ class RedisConnector {
     async cacheLastCampus (correo, campus, ex = 300) {
         await this.client.set(`last_campus:${correo}`, campus, 'EX', ex);
     }
+    async cacheLastConnectionTime (correo, hora, ex = 300) {
+        await this.client.set(`last_hora:${correo}`, hora, 'EX', ex);
+    }
     /** Devuelve el campus guardado o null (equivalente a get_last_campus). */
     async getLastCampus (correo) {
         return this.client.get(`last_campus:${correo}`);
+    }
+    async getLastConnectionTime (correo) {
+        return this.client.get(`last_hora:${correo}`);
     }
      /** Cierra la conexión limpiamente (close() en Python). */
     async close () {
@@ -56,7 +70,7 @@ class DBHandler {
             MYSQL_APP_USER,
             MYSQL_APP_PASSWORD,
             MYSQL_DATABASE,
-            MYSQL_POOL_LIMIT = 20          // opcional en .env
+            MYSQL_POOL_LIMIT = 50          // opcional en .env
         } = process.env;
         if (!MYSQL_HOST || !MYSQL_DATABASE || !MYSQL_APP_USER) throw new Error('ℹ️  Falta configuración MySQL');
       /*  mysql2/promise crea un **pool** de conexiones;
@@ -131,16 +145,25 @@ class DataProcessor {
   
       this.connQueue = [];
       this.movQueue = [];
-      this.maxBatchSize = 200000;
-      this.flushIntervalMs = 1000;
+      this.maxBatchSize = 2000; // nº msgs que llenan el lote
+      this.flushIntervalMs = 1000;  // cada 1 segundo
       this._stopped = false;
   
-      this._startFlushLoop();
-    }
-    _startFlushLoop() {
-        this.flushTimer = setInterval(() => {
-          this.flushBatches();
-        }, this.flushIntervalMs);
+      /* timer: flush cada X ms */
+      this.flushTimer = setInterval(() => {
+        this._flushBatches().catch(err =>
+          console.error('Flush timer error → sigo vivo:', err)
+        );
+    },  this.flushIntervalMs);
+  }
+    _enqueue(queue, item) {
+      queue.push(item);
+      /* disparo por tamaño */
+      if (queue.length >= this.maxBatchSize) {
+        this._flushBatches().catch(err =>
+          logger.warn({ err }, 'Flush timer error → sigo vivo')
+        );
+      }
     }
     _parseTs(rawTs) {
         const [mon, day, timeStr, year] = rawTs.split(' ');
@@ -149,14 +172,16 @@ class DataProcessor {
         return new Date(+year, months[mon], +day, h, m, s);
     } 
     normalizarCampus(raw) {
-        const map = { CC:'CENTRAL', Comisariato:'CENTRAL', CBAL:'BALZAY', balzay:'BALZAY', Balzay:'BALZAY','CREDU': 'CENTRAL','credu': 'CENTRAL','Credu': 'CENTRAL' };
+        const map = { CC:'CENTRAL', Comisariato:'CENTRAL', CBAL:'BALZAY', balzay:'BALZAY', Balzay:'BALZAY',CREDU: 'CENTRAL',credu: 'CENTRAL',Credu: 'CENTRAL' };
         return map[raw] || raw;
     }
     _parseMessage(raw) {
         let data;
         try {
           data = JSON.parse(raw);
-        } catch {
+        } catch (e) {
+          jsonFail++;
+          logger.debug({ err: e, raw: raw.slice(0, 200) }, 'JSON inválido');
           return null;
         }
         const user = data.user;
@@ -176,7 +201,7 @@ class DataProcessor {
           ap = '';
         }
     
-        return {
+        const parsed = {
           emailHash: crypto.createHash('blake2s256').update(user).digest('hex'),
           gender: this._inferGender(user),
           ap,
@@ -184,13 +209,16 @@ class DataProcessor {
           fecha,
           hora,
         };
+        return parsed;
     }
     async processMessage(raw) {
         // 1. Parseo y validación
         let msg;
         try {
             msg = this._parseMessage(raw);
-            if (!msg) return;
+            if (!msg){
+              return;
+            } 
           } catch {
             return; // JSON inválido
           }
@@ -199,22 +227,24 @@ class DataProcessor {
         const campusNew = msg.campus;
         const fecha     = msg.fecha;
         const hora      = msg.hora;
-        // 2. Obtener campus anterior del usuario del cache
-        let campusOld = await this.redis.getLastCampus(key);
-        
-        // 3. Si no estaba en cache → miramos en BD y cacheamos ese campus antiguo
-        if (campusOld == null) {
-            campusOld = await this.db.getLastCampus(key);
-            if (campusOld) {
-              await this.redis.cacheLastCampus(key, campusOld, 300);
-            }
+        /* 2. Obtener campus y hora de la última conexión del cache
+        (siempre actualizamos el cache después de encolar la conexión) */
+        let [campusOld, horaOld] = await Promise.all([
+            this.redis.getLastCampus(key),
+            this.redis.getLastConnectionTime(key)
+        ]);
+        // 3. Si no estaba en cache → miramos en BD 
+        if (campusOld == null || horaOld == null) {
+          [campusOld, horaOld] = await Promise.all([
+            this.db.getLastCampus(key),
+            this.db.getLastConnectionTime(key)]);           
+            if (campusOld) await this.redis.cacheLastCampus(key, campusOld, 300);
+            if (horaOld)   this.redis.cacheLastConnectionTime(key, horaOld, 300);   
         }
         // Si el campus actual es diferente al último campus
-        if (campusOld && campusOld !== campusNew) {
-            // 4.a Recuperar hora de la última conexión de BD
-            const horaOld = await this.db.getLastConnectionTime(key);
+        if (campusOld && campusOld !== campusNew && horaOld) {
             // 4.b Encolar movimiento con hora anterior
-            this.movQueue.push({
+            this._enqueue(this.movQueue,{
               correo: key,
               sexo: msg.gender,
               campusAnterior: campusOld,
@@ -230,10 +260,10 @@ class DataProcessor {
             // 4.d Cachear sólo el nuevo campus (TTL 300 s)
             await this.redis.cacheLastCampus(key, campusNew, 300);
 
-
         }
+        
         // Encolar conexión
-        this.connQueue.push({
+        this._enqueue(this.connQueue,{
             correo: key,
             sexo: msg.gender,
             ap: msg.ap,
@@ -241,20 +271,45 @@ class DataProcessor {
             fecha: fecha,
             hora: hora
       });
+      // Actualizar caches
+      await Promise.all([
+        this.redis.cacheLastCampus(key, campusNew, 300),
+        this.redis.cacheLastConnectionTime(key, hora, 300)
+      ]);
     }
-                      
-    async flushBatches() {
-        // Conexiones
-        if (this.connQueue.length) {
-          const batch = this.connQueue.splice(0, this.maxBatchSize);
+
+    async _flushBatches() {
+      //console.log(`🗄️  Flush: ${this.connQueue.length} conexiones · ${this.movQueue.length} movimientos`);
+      /* CONEXIONES */
+      if (this.connQueue.length) {
+        const batch = this.connQueue.splice(0);      // vacía array
+        try {
           await this.db.bulkUpsertConexiones(batch);
+        } catch (err) {
+          //console.error('Error bulkUpsertConexiones:', err);
+          logger.error({ err }, 'Error bulkUpsertConexiones');
+          /* si falla, re-inyecta para reintentar en el próximo flush */
+          this.connQueue.unshift(...batch);
+          throw err;
         }
-        // Movimientos
-        if (this.movQueue.length) {
-          const batch = this.movQueue.splice(0, this.maxBatchSize);
-          await this.db.bulkInsertMovimientos(batch);
+      }
+  
+      /* MOVIMIENTOS (solo válidos) */
+      if (this.movQueue.length) {
+        const batch = this.movQueue.splice(0).filter(m => m.hora_salida);
+        if (batch.length) {
+          try {
+            await this.db.bulkInsertMovimientos(batch);
+          } catch (err) {
+            //console.error('Error bulkInsertMovimientos:', err);
+            logger.error({ err }, 'Error bulkInsertMovimientos');
+            this.movQueue.unshift(...batch);
+            throw err;
+          }
         }
+      }
     }
+    
     _inferGender(user) {
         const local = user.split('@')[0];
         const name = local.split('.')[0];
@@ -265,7 +320,7 @@ class DataProcessor {
     }
     async shutdown() {
         clearInterval(this.flushTimer);
-        await this.flushBatches();
+        await this._flushBatches();
         await this.redis.close();
         await this.db.close();
     }
@@ -322,16 +377,37 @@ async function main () {
     redis = new RedisConnector();
     db    = new DBHandler();
     await redis.connect();
-    const notifier = new MovementNotifier();
+    notifier = new MovementNotifier();
     processor = new DataProcessor(db, notifier, redis);
     console.log(' Conectado a Redis, esperando mensajes…');
   
     while (true) {
+        //console.log('  Esperando mensaje…');
         const raw = await redis.getMessage('socket_messages', 1);   // timeout 1 s
-        if (!raw) continue;   // si no llegó nada, vuelve al BLPOP 
-        await processor.processMessage(raw);   // no llegó nada, vuelve al BLPOP
+        if (raw){
+          totalRx++;
+          logger.debug({ raw: raw.slice(0, 200) }, '📩 mensaje recibido');   // solo con LOG_LEVEL=debug
+          //console.log('📩  Mensaje recibido:', raw.slice(0, 120));
+          try {
+            await processor.processMessage(raw);
+          }
+          catch (err) {
+            logger.error({ err, raw: raw.slice(0, 200) }, '❌ error procesando mensaje');
+            //console.error('Error procesando mensaje:', err);
+            //console.error('  Error procesando mensaje:', err);
+          }
+            /* resumen cada 1 000 mensajes */
+          if (totalRx % 100 === 0) {
+            logger.info({
+            totalRx, jsonFail, parseFail,
+            connQueue: processor.connQueue.length,
+            movQueue : processor.movQueue.length
+            }, '⏱️  resumen procesador');
+          }
+        }
+      }    
     }
-}
+
 
 // Arranca (y captura CTRL-C para cerrar Redis ordenadamente)
 main().catch(console.error);

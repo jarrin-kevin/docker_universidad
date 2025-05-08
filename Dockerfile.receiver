@@ -18,8 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar código
 COPY receiver.py config.py ./
 
-# Configurar permisos adecuados
-RUN chmod 644 config.py && chown appuser:appuser config.py && \
+# Configurar permisos adecuados PARA AMBOS ARCHIVOS
+RUN chmod 644 receiver.py config.py && \
+    chown appuser:appuser receiver.py config.py && \
     mkdir -p /tmp/cache && \
     chown -R appuser:appuser /tmp/cache && \
     chmod 700 /tmp/cache

@@ -1,21 +1,24 @@
 # Dockerfile.nodejs
 FROM node:18-slim
 
-# Usuario no privilegiado (igual que Python)
-RUN groupadd -r appuser && useradd -r -g appuser -s /bin/false appuser
+# Create appuser first
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
 COPY package*.json ./
-# instala dependencias de producción
-RUN npm install --production
+
+# Install dependencies
+RUN npm install --omit=dev
 
 # Copia el resto (incluye processor.js y demás módulos)
 COPY processor.js ./
 
+# Set permissions
+RUN chmod -R 755 . && \
+    chown -R appuser:appuser .
 
-# Ajusta permisos
-RUN chown -R appuser:appuser /app
+USER appuser
 
 USER appuser
 

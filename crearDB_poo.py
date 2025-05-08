@@ -2,10 +2,6 @@ import mysql.connector
 import os
 from mysql.connector import errorcode
 from CrearTablasDb import ConexionTable, MovimientoTable,EventoLimpiarConexiones # Importar las tablas 
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
-import base64
-import time
 import sys
 import traceback
 
