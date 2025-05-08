@@ -60,7 +60,7 @@ services:
       - "6001:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 30s	
+      interval: 30s      	
       retries: 5
       start_period: 30s
       timeout: 5s
